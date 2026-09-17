@@ -1,0 +1,17 @@
+# Put this file as .gitignore in the ROOT OF YOUR VAULT (the git repo the PC and the server share).
+# Folders listed here never leave the PC — the server will not even see them.
+
+# Obsidian internals: workspace state changes constantly and causes conflicts
+.obsidian/workspace.json
+.obsidian/workspace-mobile.json
+.obsidian/cache
+.trash/
+
+# Private folders (must match VAULT_PRIVATE_FOLDERS on the server as a second line of defence)
+Private/
+Journal/
+
+# OS junk
+.DS_Store
+Thumbs.db
+desktop.ini

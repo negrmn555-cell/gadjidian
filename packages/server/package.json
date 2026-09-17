@@ -1,0 +1,26 @@
+{
+  "name": "@relay/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "dev": "tsc -p tsconfig.json && node --env-file-if-exists=../../.env dist/index.js",
+    "start": "node --env-file-if-exists=../../.env dist/index.js",
+    "cli": "node --env-file-if-exists=../../.env dist/cli.js"
+  },
+  "dependencies": {
+    "@fastify/cors": "^10.0.1",
+    "@fastify/static": "^8.0.3",
+    "@fastify/websocket": "^11.0.1",
+    "@relay/core": "0.1.0",
+    "fastify": "^5.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/ws": "^8.5.13",
+    "typescript": "^5.7.0"
+  }
+}

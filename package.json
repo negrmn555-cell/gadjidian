@@ -1,0 +1,22 @@
+{
+  "name": "obsidian-relay",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Self-hosted Obsidian assistant that answers from your vault even when your PC is off",
+  "workspaces": [
+    "packages/core",
+    "packages/server",
+    "packages/app"
+  ],
+  "scripts": {
+    "build": "npm run build -w @relay/core && npm run build -w @relay/server && npm run build -w @relay/app",
+    "test": "npm run test -w @relay/core",
+    "dev:server": "npm run dev -w @relay/server",
+    "dev:app": "npm run dev -w @relay/app",
+    "start": "npm run start -w @relay/server",
+    "typecheck": "npm run typecheck -w @relay/core && npm run typecheck -w @relay/server && npm run typecheck -w @relay/app"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

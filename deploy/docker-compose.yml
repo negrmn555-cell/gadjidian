@@ -1,0 +1,39 @@
+services:
+  relay:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    container_name: obsidian-relay
+    restart: unless-stopped
+    env_file: ../.env
+    environment:
+      DATA_DIR: /data
+      VAULT_PATH: /data/vault
+      STATIC_DIR: /app/packages/app/dist
+    volumes:
+      - relay-data:/data
+      # SSH key for git remote (read-only). Generate: ssh-keygen -t ed25519 -f deploy/ssh/id_ed25519 -N ""
+      - ./ssh:/home/node/.ssh:ro
+    expose:
+      - "8080"
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: obsidian-relay-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - relay
+
+volumes:
+  relay-data:
+  caddy-data:
+  caddy-config:
