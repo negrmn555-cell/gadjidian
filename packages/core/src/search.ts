@@ -1,5 +1,6 @@
 import type { SearchHit } from './types.js';
 import type { Vault } from './vault.js';
+import { sourceVersion } from './source-version.js';
 
 /** Lower-case and strip diacritics/punctuation for tolerant matching. */
 export function normalizeText(s: string): string {
@@ -104,7 +105,7 @@ export async function searchNotes(vault: Vault, query: string, opts: SearchOptio
     // recency: up to +3 for notes touched within 30 days
     const ageDays = (now - meta.mtime) / 86_400_000;
     score += Math.max(0, 3 - ageDays / 10);
-    hits.push({ path: note.path, title: note.title, score, snippet: makeSnippet(note.content, stems), mtime: meta.mtime });
+    hits.push({ path: note.path, title: note.title, score, snippet: makeSnippet(note.content, stems), mtime: meta.mtime, sourceVersion:sourceVersion(note.path,note.content) });
   }
   hits.sort((a, b) => b.score - a.score);
   return hits.slice(0, limit);

@@ -1,15 +1,26 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, createHash } from 'node:crypto';
 import type { Note, NoteMeta, VaultConfig } from './types.js';
 
-const DEFAULT_IGNORES = ['.obsidian', '.git', '.trash', '.sync-conflict', 'node_modules'];
+const DEFAULT_IGNORES = ['.obsidian', '.git', '.trash', '.sync-conflict', '.relay-server', 'node_modules'];
 
 export class VaultError extends Error {
   constructor(message: string, public readonly code: 'NOT_FOUND' | 'FORBIDDEN' | 'INVALID' | 'EXISTS') {
     super(message);
     this.name = 'VaultError';
   }
+}
+
+export interface VaultWriteInput {
+  path: string;
+  content: string;
+  overwrite: boolean;
+  expectedHash?: string;
+}
+
+export interface VaultWriteBackend {
+  write(input: VaultWriteInput): Promise<string>;
 }
 
 /** Normalise a vault-relative path: forward slashes, no leading "./" or "/". */
@@ -43,6 +54,14 @@ export class Vault {
   readonly config: VaultConfig;
   private readonly ignores: Set<string>;
   private readonly privateFolders: string[];
+  private writeBackend?: VaultWriteBackend;
+  private readGuard?:<T>(work:()=>Promise<T>)=>Promise<T>;
+  setReadGuard(guard:<T>(work:()=>Promise<T>)=>Promise<T>):void{this.readGuard=guard;}
+
+  setWriteBackend(backend: VaultWriteBackend): void {
+    if (this.writeBackend) throw new Error('Vault write backend is already configured');
+    this.writeBackend = backend;
+  }
 
   constructor(config: VaultConfig) {
     this.config = config;
@@ -55,6 +74,7 @@ export class Vault {
 
   /** Vault-relative -> absolute path, or throws on traversal / private access. */
   resolve(rel: string, opts: { allowPrivate?: boolean } = {}): string {
+    if (path.isAbsolute(rel) || path.win32.isAbsolute(rel) || rel.includes('\0')) throw new VaultError('Absolute paths are not allowed', 'INVALID');
     const normalized = normalizeRel(rel);
     if (normalized.startsWith('..') || path.isAbsolute(normalized)) {
       throw new VaultError(`Invalid path: ${rel}`, 'INVALID');
@@ -62,6 +82,7 @@ export class Vault {
     if (!opts.allowPrivate && this.isPrivate(normalized)) {
       throw new VaultError(`Path is in a private folder: ${rel}`, 'FORBIDDEN');
     }
+    if (this.isIgnored(normalized)) throw new VaultError('Path is in an ignored folder', 'FORBIDDEN');
     const abs = path.resolve(this.root, normalized);
     const relCheck = path.relative(this.root, abs);
     if (relCheck.startsWith('..') || path.isAbsolute(relCheck)) {
@@ -71,13 +92,30 @@ export class Vault {
   }
 
   isPrivate(rel: string): boolean {
-    const normalized = normalizeRel(rel);
-    return this.privateFolders.some((pf) => normalized === pf || normalized.startsWith(pf + '/'));
+    const normalized = normalizeRel(rel).toLowerCase();
+    return this.privateFolders.some((pf) => normalized === pf.toLowerCase() || normalized.startsWith(pf.toLowerCase() + '/'));
   }
 
   isIgnored(rel: string): boolean {
-    const parts = normalizeRel(rel).split('/');
-    return parts.some((seg) => this.ignores.has(seg) || seg.includes('.sync-conflict'));
+    const parts = normalizeRel(rel).toLowerCase().split('/');
+    return parts.some((seg) => [...this.ignores].some(name => name.toLowerCase() === seg) || seg.includes('.sync-conflict'));
+  }
+
+  /** Disallow symlinks/junctions in a vault path, including existing parent folders. */
+  async safePath(rel: string): Promise<string> {
+    const abs = this.resolve(rel);
+    const segments = path.relative(this.root, abs).split(path.sep).filter(Boolean);
+    let current = this.root;
+    for (const segment of segments) {
+      current = path.join(current, segment);
+      try {
+        if ((await fs.lstat(current)).isSymbolicLink()) throw new VaultError('Symbolic links are not allowed in vault paths', 'FORBIDDEN');
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code === 'ENOENT') break;
+        throw e;
+      }
+    }
+    return abs;
   }
 
   private toRel(abs: string): string {
@@ -86,7 +124,7 @@ export class Vault {
 
   async exists(rel: string): Promise<boolean> {
     try {
-      await fs.access(this.resolve(rel));
+      await fs.access(await this.safePath(rel));
       return true;
     } catch {
       return false;
@@ -94,8 +132,9 @@ export class Vault {
   }
 
   /** Recursively list markdown notes (skips ignored and private folders). */
-  async listNotes(folder = ''): Promise<NoteMeta[]> {
-    const start = this.resolve(folder);
+  listNotes(folder=''):Promise<NoteMeta[]>{return this.readGuard?this.readGuard(()=>this.listNotesUnlocked(folder)):this.listNotesUnlocked(folder);}
+  private async listNotesUnlocked(folder = ''): Promise<NoteMeta[]> {
+    const start = await this.safePath(folder);
     const result: NoteMeta[] = [];
     const walk = async (dir: string): Promise<void> => {
       let entries;
@@ -126,8 +165,9 @@ export class Vault {
   }
 
   /** List immediate children of a folder (folders and md files). */
-  async listFolder(folder = ''): Promise<{ folders: string[]; notes: string[] }> {
-    const abs = this.resolve(folder);
+  listFolder(folder=''):Promise<{folders:string[];notes:string[]}>{return this.readGuard?this.readGuard(()=>this.listFolderUnlocked(folder)):this.listFolderUnlocked(folder);}
+  private async listFolderUnlocked(folder = ''): Promise<{ folders: string[]; notes: string[] }> {
+    const abs = await this.safePath(folder);
     const base = normalizeRel(folder);
     const folders: string[] = [];
     const notes: string[] = [];
@@ -148,9 +188,10 @@ export class Vault {
     return { folders, notes };
   }
 
-  async readNote(rel: string): Promise<Note> {
+  readNote(rel:string):Promise<Note>{return this.readGuard?this.readGuard(()=>this.readNoteUnlocked(rel)):this.readNoteUnlocked(rel);}
+  private async readNoteUnlocked(rel: string): Promise<Note> {
     const p = ensureMd(rel);
-    const abs = this.resolve(p);
+    const abs = await this.safePath(p);
     let content: string;
     let st;
     try {
@@ -168,16 +209,24 @@ export class Vault {
   }
 
   /** Atomic write (tmp + rename). Creates parent folders. */
-  async writeNote(rel: string, content: string, opts: { overwrite?: boolean } = {}): Promise<string> {
+  async writeNote(rel: string, content: string, opts: { overwrite?: boolean; expectedHash?: string } = {}): Promise<string> {
     const p = ensureMd(rel);
-    const abs = this.resolve(p);
+    const abs = await this.safePath(p);
+    if (this.writeBackend) return this.writeBackend.write({ path: normalizeRel(p), content, overwrite: opts.overwrite ?? false, expectedHash: opts.expectedHash });
     if (!opts.overwrite && (await this.exists(p))) {
       throw new VaultError(`Note already exists: ${p}`, 'EXISTS');
     }
+    if (opts.expectedHash !== undefined) {
+      const existing = await fs.readFile(abs, 'utf8');
+      if (createHash('sha256').update(existing).digest('hex') !== opts.expectedHash) throw new VaultError('Note changed while editing', 'INVALID');
+    }
     await fs.mkdir(path.dirname(abs), { recursive: true });
+    await this.safePath(p);
     const tmp = `${abs}.${randomBytes(4).toString('hex')}.tmp`;
-    await fs.writeFile(tmp, content, 'utf8');
-    await fs.rename(tmp, abs);
+    try {
+      await fs.writeFile(tmp, content, 'utf8');
+      await fs.rename(tmp, abs);
+    } finally { await fs.rm(tmp, { force: true }); }
     return normalizeRel(p);
   }
 
@@ -188,7 +237,8 @@ export class Vault {
     let candidate = p;
     for (let i = 1; i < 1000; i++) {
       if (!(await this.exists(candidate))) {
-        return this.writeNote(candidate, content);
+        try { return await this.writeNote(candidate, content); }
+        catch (e) { if (!(e instanceof VaultError) || e.code !== 'EXISTS') throw e; }
       }
       candidate = `${base} ${i}.md`;
     }
@@ -201,7 +251,7 @@ export class Vault {
    */
   async appendToNote(rel: string, text: string, section?: string): Promise<void> {
     const p = ensureMd(rel);
-    const abs = this.resolve(p);
+    const abs = await this.safePath(p);
     let content = '';
     try {
       content = await fs.readFile(abs, 'utf8');
@@ -209,7 +259,7 @@ export class Vault {
       throw new VaultError(`Note not found: ${rel}`, 'NOT_FOUND');
     }
     const updated = insertIntoSection(content, text, section);
-    await this.writeNote(p, updated, { overwrite: true });
+    await this.writeNote(p, updated, { overwrite: true, expectedHash: createHash('sha256').update(content).digest('hex') });
   }
 
   async findByTitle(title: string): Promise<NoteMeta[]> {

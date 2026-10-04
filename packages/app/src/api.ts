@@ -1,3 +1,6 @@
+import type { Task, LegacyTask, TaskCreateInput, TaskPatch, TaskPage, TaskWriteResult, ProviderPage, ProviderPublic, ProviderWrite, ProviderSlot, ProviderTestResult, ChatSession, ChatPage, ChatMode, ChatSendInput, Attachment, NotePage, NoteRecord, NoteCreateInput, NoteEditInput, NoteWriteResult, ImportResult, ChatMemory } from '@relay/core/contracts';
+import type { AutomationSettings,ScheduledJob,OrganizationPreview,AppNotification } from '@relay/core/contracts';
+
 export interface Device {
   id: number;
   name: string;
@@ -18,7 +21,7 @@ export interface Message {
   role: 'user' | 'assistant';
   content: string;
   createdAt: number;
-  meta?: { sources?: string[]; actions?: Action[]; error?: boolean; path?: string } | null;
+  meta?: { sources?: string[]; actions?: Action[]; error?: boolean; path?: string; attachments?: Attachment[]; mode?: ChatMode } | null;
   pending?: boolean;
   status?: string;
 }
@@ -75,7 +78,55 @@ async function req<T>(method: string, path: string, body?: unknown, raw?: { data
 }
 
 export const api = {
-  health: () => req<{ ok: boolean; version: string; sync: SyncStatus }>('GET', '/api/health'),
+  conflicts:()=>req<{paths:string[];mergePaths:string[]}>('GET','/api/sync/conflicts'),
+  conflict:(path:string)=>req<{path:string;content:string|null;contentHash:string|null;base:string|null;ours:string|null;theirs:string|null}>('GET','/api/sync/conflicts/document?path='+encodeURIComponent(path)),
+  resolveConflict:(path:string,expectedContentHash:string|null,content:string|null,operationId:string)=>req('POST','/api/sync/conflicts/resolve',{path,expectedContentHash,content,operationId}),
+  completeMerge:(expectedPaths:string[])=>req<SyncStatus>('POST','/api/sync/conflicts/complete',{expectedPaths}),
+  automation:()=>req<{settings:AutomationSettings;jobs:ScheduledJob[];checkpoint:{head:string|null;policyVersion:number;completedAt:number|null}}>('GET','/api/automation'),
+  saveAutomation:(settings:AutomationSettings)=>req<AutomationSettings>('PUT','/api/automation',settings),
+  organizePreview:(runId:string)=>req<OrganizationPreview>('POST','/api/organizer/preview',{runId}),
+  organizeApply:(planId:string,operationId:string)=>req<{changedFiles:number;remaining:number}>('POST','/api/organizer/apply',{planId,operationId}),
+  reconcileOrganizer:()=>req('POST','/api/organizer/reconcile',{}),
+  backfillIds:(operationId:string)=>req<{result:{count:number;remaining:number}}>('POST','/api/index/backfill',{operationId}),
+  retryJob:(id:string)=>req<ScheduledJob>('POST','/api/jobs/'+encodeURIComponent(id)+'/retry',{}),
+  notifications:()=>req<{items:AppNotification[]}>('GET','/api/notifications'),
+  readNotification:(id:string)=>req('POST','/api/notifications/'+encodeURIComponent(id)+'/read',{}),
+  pushStatus:()=>req<{publicKey:string;subscribed:boolean;deliveries:{state:string;count:number}[]}>('GET','/api/notifications/push'),
+  subscribePush:(subscription:PushSubscriptionJSON)=>req('POST','/api/notifications/push',subscription),
+  unsubscribePush:()=>req('DELETE','/api/notifications/push',{}),
+  notes:(q='')=>req<NotePage>('GET','/api/notes?q='+encodeURIComponent(q)),
+  resolveNote:(target:string,from='')=>req<{paths:string[];anchor:string|null}>('GET','/api/notes/resolve?target='+encodeURIComponent(target)+'&from='+encodeURIComponent(from)),
+  note:(path:string)=>req<NoteRecord>('GET','/api/notes/document?path='+encodeURIComponent(path)),
+  createNote:(note:NoteCreateInput,operationId:string)=>req<NoteWriteResult>('POST','/api/notes',{note,operationId}),
+  editNote:(path:string,edit:NoteEditInput,expectedContentHash:string,operationId:string)=>req<NoteWriteResult>('PATCH','/api/notes/document',{path,edit,expectedContentHash,operationId}),
+  importFile:(chatId:string,fileId:string,note:{title:string;category:string},operationId:string)=>req<ImportResult>('POST','/api/attachments/'+encodeURIComponent(fileId)+'/import',{chatId,note,operationId}),
+  memory:(chatId:string)=>req<ChatMemory>('GET','/api/chats/'+encodeURIComponent(chatId)+'/memory'),
+  summarize:(chatId:string)=>req<ChatMemory>('POST','/api/chats/'+encodeURIComponent(chatId)+'/memory',{}),
+  downloadOriginal:async(assetId:string)=>{
+    const token=getToken(),res=await fetch('/api/assets/'+encodeURIComponent(assetId)+'/original',{headers:token?{authorization:'Bearer '+token}:{}});
+    if(!res.ok)throw new ApiError('Не удалось получить оригинал.',res.status);
+    const blob=await res.blob(),url=URL.createObjectURL(blob),a=document.createElement('a');
+    const header=res.headers.get('content-disposition'),name=header?.match(/filename\*=UTF-8''(.+)/)?.[1];a.href=url;a.download=name?decodeURIComponent(name):'original';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),30_000);
+  },
+  chats:()=>req<ChatPage>('GET','/api/chats'),
+  newChat:(entryId:string,timezone:string)=>req<ChatSession>('POST','/api/chats',{entryId,timezone}),
+  getChat:(id:string)=>req<ChatSession>('GET','/api/chats/'+encodeURIComponent(id)),
+  renameChat:(chat:ChatSession,title:string)=>req<ChatSession>('PATCH','/api/chats/'+encodeURIComponent(chat.id),{title,expectedVersion:chat.version}),
+  removeChat:(chat:ChatSession)=>req('DELETE','/api/chats/'+encodeURIComponent(chat.id),{expectedVersion:chat.version}),
+  chatRuns:(id:string)=>req<{items:{requestId:string;state:string;artifacts:string[]}[]}>('GET','/api/chats/'+encodeURIComponent(id)+'/runs'),
+  bindChat:(chat:ChatSession,providerId:string|null)=>req<ChatSession>('PUT','/api/chats/'+encodeURIComponent(chat.id)+'/provider',{providerId,expectedVersion:chat.version}),
+  chatMode:(chat:ChatSession,mode:ChatMode)=>req<ChatSession>('PATCH','/api/chats/'+encodeURIComponent(chat.id),{mode,expectedVersion:chat.version}),
+  cancelDraft:(chat:ChatSession)=>req<ChatSession>('DELETE','/api/chats/'+encodeURIComponent(chat.id)+'/draft',{draftId:chat.pendingTask?.id,draftVersion:chat.pendingTask?.version}),
+  upload:(chatId:string,file:File)=>req<Attachment>('POST','/api/attachments/queued?chatId='+encodeURIComponent(chatId)+'&name='+encodeURIComponent(file.name),undefined,{data:file,type:'application/octet-stream'}),
+  attachment:(chatId:string,id:string)=>req<Attachment>('GET','/api/attachments/'+encodeURIComponent(id)+'?chatId='+encodeURIComponent(chatId)),
+  retryAttachment:(chatId:string,id:string)=>req('POST','/api/attachments/'+encodeURIComponent(id)+'/retry',{chatId}),
+  providers: () => req<ProviderPage>('GET', '/api/providers'),
+  createProvider: (slot: ProviderSlot, provider: ProviderWrite) => req<ProviderPublic>('POST', '/api/providers', { slot, provider }),
+  updateProvider: (id: string, provider: ProviderWrite) => req<ProviderPublic>('PATCH', '/api/providers/' + encodeURIComponent(id), provider),
+  removeProvider: (id: string, expectedVersion: number) => req<void>('DELETE', '/api/providers/' + encodeURIComponent(id), { expectedVersion }),
+  selectProvider: (provider: Pick<ProviderPublic, 'id' | 'version'> | null) => req<ProviderPage>('PUT', '/api/providers/default', { providerId: provider?.id ?? null, expectedVersion: provider?.version }),
+  testProvider: (id: string) => req<ProviderTestResult>('POST', '/api/providers/' + encodeURIComponent(id) + '/test', {}),
+  health: () => req<{ ok: boolean; version: string; sync: SyncStatus; requireStandalone: boolean }>('GET', '/api/health'),
   pair: (code: string, name: string) => req<{ token: string; device: Device }>('POST', '/api/pair', { code, name }),
   me: () =>
     req<{ device: Device; vault: { inbox: string; daily: string; privateFolders: string[] }; model: string; sync: SyncStatus; requireStandalone: boolean }>(
@@ -85,14 +136,22 @@ export const api = {
   commands: () => req<{ commands: Command[] }>('GET', '/api/commands'),
   messages: (chat = 'main', before?: number) =>
     req<{ messages: Message[] }>('GET', `/api/messages?chat=${encodeURIComponent(chat)}${before ? `&before=${before}` : ''}`),
-  clearMessages: (chat = 'main') => req<{ ok: true }>('DELETE', `/api/messages?chat=${encodeURIComponent(chat)}`),
-  chat: (text: string, chat = 'main') => req<ChatResult>('POST', '/api/chat', { text, chat }),
+  clearMessages: async(chat = 'main') => {const r=await req<{ ok: true }>('DELETE', `/api/messages?chat=${encodeURIComponent(chat)}`);window.dispatchEvent(new CustomEvent('relay-clear-draft',{detail:{chat}}));return r;},
+  chat: (input:ChatSendInput) => req<ChatResult>('POST', '/api/chat', input),
+  runStatus:(chatId:string,requestId:string)=>req<{state:string;artifacts:string[];result:ChatResult|null;expired:boolean}>('GET','/api/chats/'+encodeURIComponent(chatId)+'/runs/'+encodeURIComponent(requestId)),
+  cancelRun:(chatId:string,requestId:string)=>req('POST','/api/chats/'+encodeURIComponent(chatId)+'/runs/'+encodeURIComponent(requestId)+'/cancel',{}),
   devices: () => req<{ devices: Device[] }>('GET', '/api/devices'),
   revoke: (id: number) => req<{ ok: true }>('DELETE', `/api/devices/${id}`),
   quickKey: (folder?: string) => req<{ token: string; device: Device }>('POST', '/api/devices/quick', { folder }),
   newCode: () => req<{ code: string; expiresAt: number }>('POST', '/api/pairing/new'),
   syncPull: () => req<SyncStatus>('POST', '/api/sync/pull'),
-  transcribe: (blob: Blob) => req<{ text: string }>('POST', '/api/transcribe', undefined, { data: blob, type: blob.type || 'audio/webm' }),
+  tasks: () => req<TaskPage>('GET', '/api/tasks'),
+  task: (id:string)=>req<Task>('GET','/api/tasks/'+encodeURIComponent(id)),
+  legacyTasks:()=>req<{items:LegacyTask[]}>('GET','/api/tasks/legacy'),
+  convertLegacy:(source:LegacyTask,task:TaskCreateInput,operationId:string)=>req<TaskWriteResult>('POST','/api/tasks/legacy/convert',{source,task,operationId}),
+  createTask: (task: TaskCreateInput, operationId: string) => req<TaskWriteResult>('POST', '/api/tasks', { task, operationId }),
+  updateTask: (id: string, patch: TaskPatch, expectedContentHash: string, operationId: string) =>
+    req<TaskWriteResult>('PATCH', '/api/tasks/' + encodeURIComponent(id), { patch, expectedContentHash, operationId }),
 };
 
 export interface SyncStatus {
@@ -109,6 +168,7 @@ export interface ChatResult {
   actions: Action[];
   userMessageId: number;
   messageId: number;
+  chat:ChatSession;
 }
 
 /** WebSocket chat client with automatic reconnect. */
@@ -120,12 +180,18 @@ export class ChatSocket {
   onState: (s: 'connecting' | 'open' | 'closed') => void = () => {};
 
   connect(): void {
+    void this.open();
+  }
+  private async open():Promise<void> {
     this.closed = false;
     const token = getToken();
     if (!token) return;
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     this.onState('connecting');
-    const ws = new WebSocket(`${proto}://${location.host}/api/ws?token=${encodeURIComponent(token)}`);
+    let ticket:string;
+    try{ticket=(await req<{ticket:string}>('POST','/api/ws-ticket',{})).ticket;}catch{this.onState('closed');if(!this.closed)this.timer=window.setTimeout(()=>this.connect(),3000);return;}
+    if(this.closed)return;
+    const ws = new WebSocket(`${proto}://${location.host}/api/ws?ticket=${encodeURIComponent(ticket)}`);
     this.ws = ws;
     ws.onopen = () => this.onState('open');
     ws.onmessage = (ev) => {

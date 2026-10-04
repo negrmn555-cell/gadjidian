@@ -9,6 +9,10 @@
     ".": {
       "types": "./dist/src/index.d.ts",
       "default": "./dist/src/index.js"
+    },
+    "./contracts": {
+      "types": "./dist/src/contracts.d.ts",
+      "default": "./dist/src/contracts.js"
     }
   },
   "scripts": {
@@ -19,5 +23,8 @@
   "devDependencies": {
     "@types/node": "^22.10.0",
     "typescript": "^5.7.0"
+  },
+  "dependencies": {
+    "yaml": "^2.9.1"
   }
 }

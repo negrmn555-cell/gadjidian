@@ -1,3 +1,6 @@
+export * from './links.js';
+export * from './mode-json.js';
+export * from './source-version.js';
 export * from './types.js';
 export * from './vault.js';
 export * from './search.js';
@@ -7,3 +10,5 @@ export * from './llm.js';
 export * from './tools.js';
 export * from './commands.js';
 export * from './agent.js';
+export * from './contracts.js';
+export * from './task-document.js';

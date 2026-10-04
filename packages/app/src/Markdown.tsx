@@ -93,9 +93,9 @@ function inline(s: string): ReactNode {
       const inner = tok.slice(2, -2);
       const [target, alias] = inner.split('|');
       parts.push(
-        <span key={k++} style={{ color: 'var(--accent2)' }}>
+        <button key={k++} className="wiki-link" onClick={()=>window.dispatchEvent(new CustomEvent('relay-open-note',{detail:{target}}))}>
           {alias ?? target.split('/').pop()}
-        </span>,
+        </button>,
       );
     } else if (tok.startsWith('[')) {
       const label = tok.slice(1, tok.indexOf(']'));

@@ -1,4 +1,5 @@
 import type { ChatMessage, LlmConfig, ToolDefinition } from './types.js';
+import { nativeChat } from './native-llm.js';
 
 export interface ChatCompletionResult {
   message: ChatMessage;
@@ -15,25 +16,28 @@ export class LlmError extends Error {
 
 /** Thin OpenAI-compatible chat client (works with OpenAI, OpenRouter, Ollama, LM Studio, vLLM). */
 export class LlmClient {
-  constructor(private readonly cfg: LlmConfig) {}
+  constructor(private readonly cfg: LlmConfig, private readonly transport: typeof fetch = fetch) {}
 
   get model(): string {
     return this.cfg.model;
   }
 
-  async chat(messages: ChatMessage[], tools?: ToolDefinition[], signal?: AbortSignal): Promise<ChatCompletionResult> {
+  async chat(messages: ChatMessage[], tools?: ToolDefinition[], signal?: AbortSignal, options?: { toolChoice?: unknown; responseFormat?: unknown;maxTokens?:number }): Promise<ChatCompletionResult> {
+    const maxTokens=options?.maxTokens===undefined?this.cfg.maxTokens:Math.max(1,Math.min(this.cfg.maxTokens??4096,Math.floor(options.maxTokens)));
+    if(this.cfg.adapter&&this.cfg.adapter!=='openai_compatible')return nativeChat({...this.cfg,maxTokens},this.transport,messages,tools,signal,options);
     const url = `${this.cfg.baseUrl.replace(/\/+$/, '')}/chat/completions`;
     const body: Record<string, unknown> = {
       model: this.cfg.model,
-      messages,
+      messages: messages.map(({ parts, nativeParts:_native, ...message }) => ({ ...message, content: parts ?? message.content })),
       temperature: this.cfg.temperature ?? 0.3,
     };
-    if (this.cfg.maxTokens) body.max_tokens = this.cfg.maxTokens;
+    if (maxTokens) body.max_tokens = maxTokens;
     if (tools && tools.length) {
       body.tools = tools;
-      body.tool_choice = 'auto';
+      body.tool_choice = options?.toolChoice ?? 'auto';
     }
-    const res = await fetch(url, {
+    if (options?.responseFormat) body.response_format = options.responseFormat;
+    const res = await this.transport(url, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -44,17 +48,23 @@ export class LlmClient {
       signal,
     });
     if (!res.ok) {
-      const text = await res.text().catch(() => '');
-      throw new LlmError(`LLM request failed: ${res.status} ${text.slice(0, 300)}`, res.status);
+      await res.body?.cancel();
+      throw new LlmError('LLM request failed: HTTP ' + res.status, res.status);
     }
-    const data = (await res.json()) as {
+    let data: {
       choices: { message: ChatMessage; finish_reason: string }[];
       usage?: { prompt_tokens: number; completion_tokens: number };
     };
-    const choice = data.choices?.[0];
-    if (!choice) throw new LlmError('LLM returned no choices');
+    try { data = await res.json() as typeof data; } catch { throw new LlmError('Модель вернула некорректный JSON.'); }
+    if (!data || typeof data !== 'object' || !Array.isArray(data.choices)) throw new LlmError('Модель вернула некорректный ответ.');
+    const choice = data.choices[0];
+    if (!choice || choice.message?.role !== 'assistant' ||
+      (choice.message.content !== null && typeof choice.message.content !== 'string' && !(choice.message.content === undefined && choice.message.tool_calls?.length)) ||
+      (choice.message.tool_calls !== undefined && (!Array.isArray(choice.message.tool_calls) || choice.message.tool_calls.length > 32 || choice.message.tool_calls.some(c => !c || typeof c.id !== 'string' || c.type !== 'function' || typeof c.function?.name !== 'string' || typeof c.function?.arguments !== 'string')))) {
+      throw new LlmError('Модель вернула некорректный ответ.');
+    }
     return {
-      message: choice.message,
+      message: { role:'assistant',content: choice.message.content ?? null,...(choice.message.tool_calls?{tool_calls:choice.message.tool_calls}:{} ) },
       finishReason: choice.finish_reason,
       usage: data.usage
         ? { promptTokens: data.usage.prompt_tokens, completionTokens: data.usage.completion_tokens }
@@ -62,23 +72,4 @@ export class LlmClient {
     };
   }
 
-  /** Transcribe audio via OpenAI-compatible /audio/transcriptions (Whisper). */
-  async transcribe(audio: Blob, fileName: string, model = 'whisper-1', language?: string): Promise<string> {
-    const url = `${this.cfg.baseUrl.replace(/\/+$/, '')}/audio/transcriptions`;
-    const form = new FormData();
-    form.append('file', audio, fileName);
-    form.append('model', model);
-    if (language) form.append('language', language);
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        ...(this.cfg.apiKey ? { authorization: `Bearer ${this.cfg.apiKey}` } : {}),
-        ...(this.cfg.headers ?? {}),
-      },
-      body: form,
-    });
-    if (!res.ok) throw new LlmError(`Transcription failed: ${res.status}`, res.status);
-    const data = (await res.json()) as { text: string };
-    return data.text;
-  }
 }

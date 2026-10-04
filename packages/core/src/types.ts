@@ -38,6 +38,7 @@ export interface SearchHit {
   score: number;
   snippet: string;
   mtime: number;
+  sourceVersion?: import('./contracts.js').MemorySource;
 }
 
 export type AgentEventType = 'status' | 'tool' | 'delta' | 'done' | 'error';
@@ -64,6 +65,7 @@ export interface AgentResult {
   /** Files that were created or modified. */
   actions: AgentActionWithLabel[];
   usage?: { promptTokens: number; completionTokens: number };
+  sourceVersions?: import('./contracts.js').MemorySource[];
 }
 
 export interface AgentActionWithLabel extends AgentAction {
@@ -73,9 +75,13 @@ export interface AgentActionWithLabel extends AgentAction {
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
   content: string | null;
+  /** Multimodal parts are serialized instead of content for user messages only. */
+  parts?: ({ type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } })[];
   name?: string;
   tool_call_id?: string;
   tool_calls?: ToolCall[];
+  /** Opaque native response parts; retained only inside an active model/tool round trip. */
+  nativeParts?: unknown[];
 }
 
 export interface ToolCall {
@@ -94,6 +100,7 @@ export interface ToolDefinition {
 }
 
 export interface LlmConfig {
+  adapter?: 'openai_compatible'|'anthropic'|'gemini';
   /** OpenAI-compatible base URL, e.g. https://openrouter.ai/api/v1 or http://ollama:11434/v1 */
   baseUrl: string;
   apiKey: string;

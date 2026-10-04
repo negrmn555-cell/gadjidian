@@ -2,6 +2,24 @@ import { DatabaseSync } from 'node:sqlite';
 import { createHash, randomBytes, randomInt } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { ChatStore } from './chat-store.js';
+import { migrate } from './migrations.js';
+
+export interface VaultOperation {
+  operationId: string;
+  requestHash: string;
+  path: string;
+  baseHash: string | null;
+  contentHash: string;
+  payload: string | null;
+  state: 'prepared' | 'saved_local' | 'committed' | 'synced' | 'conflict';
+  commitSha: string | null;
+  errorCode: string | null;
+}
+export interface VaultBatch {
+  operationId:string; requestHash:string; files:{path:string;baseHash:string|null;contentHash:string;base64:string|null;delete?:boolean}[];
+  result:unknown; state:VaultOperation['state']; commitSha:string|null; errorCode:string|null;
+}
 
 export interface Device {
   id: number;
@@ -40,48 +58,61 @@ export function generateToken(prefix: string): string {
 
 export class Db {
   private db: DatabaseSync;
+  get sql(): DatabaseSync { return this.db; }
 
-  private constructor(db: DatabaseSync) {
+  private constructor(db: DatabaseSync, readonly chats: ChatStore) {
     this.db = db;
   }
 
   static async open(file: string): Promise<Db> {
     await fs.mkdir(path.dirname(file), { recursive: true });
     const db = new DatabaseSync(file);
-    db.exec(`
-      PRAGMA journal_mode = WAL;
-      CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS pairing_codes (
-        code TEXT PRIMARY KEY,
-        created_at INTEGER NOT NULL,
-        expires_at INTEGER NOT NULL,
-        used_at INTEGER
-      );
-      CREATE TABLE IF NOT EXISTS devices (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        token_hash TEXT UNIQUE NOT NULL,
-        name TEXT NOT NULL,
-        kind TEXT NOT NULL DEFAULT 'app',
-        folder TEXT,
-        created_at INTEGER NOT NULL,
-        last_seen INTEGER,
-        revoked_at INTEGER
-      );
-      CREATE TABLE IF NOT EXISTS messages (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        device_id INTEGER NOT NULL,
-        chat TEXT NOT NULL DEFAULT 'main',
-        role TEXT NOT NULL,
-        content TEXT NOT NULL,
-        meta TEXT,
-        created_at INTEGER NOT NULL
-      );
-      CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(device_id, chat, id);
-    `);
-    return new Db(db);
+    try {
+      db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA secure_delete = ON;');
+      migrate(db);
+      const chats = new ChatStore(path.join(path.dirname(file), path.basename(file, path.extname(file)) + '.chats.sqlite'));
+      try {
+        // Copy before dropping. Repeating after a crash is safe because IDs are preserved.
+        if (db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'messages'").get()) {
+          const rows = db.prepare('SELECT * FROM messages').all() as Record<string, unknown>[];
+          chats.importLegacy(rows.map(r => ({ id: Number(r.id), deviceId: Number(r.device_id), chat: String(r.chat), role: r.role as StoredMessage['role'], content: String(r.content), meta: r.meta as string | null, createdAt: Number(r.created_at) })));
+          db.exec('DROP TABLE messages; PRAGMA wal_checkpoint(TRUNCATE); VACUUM;');
+        }
+        return new Db(db, chats);
+      } catch (e) { chats.close(); throw e; }
+    } catch (e) { db.close(); throw e; }
   }
 
   // ---- settings ----
+  providerTransaction<T>(work: () => T): T {
+    this.db.exec('BEGIN IMMEDIATE');
+    try { const result = work(); this.db.exec('COMMIT'); return result; }
+    catch (e) { this.db.exec('ROLLBACK'); throw e; }
+  }
+
+  providerRows(): { id: string; slot: 'chat' | 'organizer'; version: number; config: string; secret: string | null; testResult: string | null }[] {
+    return this.db.prepare(`SELECT p.id, p.slot, p.current_version AS version, v.config_json AS config, v.encrypted_secret AS secret, v.test_result_json AS testResult
+      FROM providers p JOIN provider_versions v ON v.provider_id = p.id AND v.version = p.current_version ORDER BY p.created_at, p.id`)
+      .all() as ReturnType<Db['providerRows']>;
+  }
+
+  saveProvider(id: string, slot: 'chat' | 'organizer', version: number, config: string, secret: string | null): void {
+    this.db.prepare('INSERT INTO providers(id, slot, current_version, created_at) VALUES(?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET current_version = excluded.current_version')
+      .run(id, slot, version, Date.now());
+    this.db.prepare('INSERT INTO provider_versions(provider_id, version, config_json, encrypted_secret, created_at) VALUES(?, ?, ?, ?, ?)')
+      .run(id, version, config, secret, Date.now());
+  }
+
+  removeProvider(id: string): void { this.db.prepare('DELETE FROM providers WHERE id = ?').run(id); }
+  saveProviderTest(id: string, version: number, result: string): void {
+    this.db.prepare('UPDATE provider_versions SET test_result_json = ? WHERE provider_id = ? AND version = ?').run(result, id, version);
+  }
+  pruneProviderVersions(live: Set<string>): void {
+    const rows = this.db.prepare('SELECT v.provider_id, v.version FROM provider_versions v JOIN providers p ON p.id = v.provider_id WHERE v.version <> p.current_version').all() as { provider_id: string; version: number }[];
+    const remove = this.db.prepare('DELETE FROM provider_versions WHERE provider_id = ? AND version = ?');
+    for (const r of rows) if (!live.has(r.provider_id + ':' + r.version)) remove.run(r.provider_id, r.version);
+  }
+
   getSetting(key: string): string | null {
     const row = this.db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
     return row?.value ?? null;
@@ -165,31 +196,64 @@ export class Db {
 
   // ---- messages ----
   addMessage(deviceId: number, chat: string, role: 'user' | 'assistant', content: string, meta?: unknown): number {
-    const res = this.db
-      .prepare('INSERT INTO messages(device_id, chat, role, content, meta, created_at) VALUES(?, ?, ?, ?, ?, ?)')
-      .run(deviceId, chat, role, content, meta === undefined ? null : JSON.stringify(meta), Date.now());
-    return Number(res.lastInsertRowid);
+    return this.chats.add(deviceId, chat, role, content, meta);
   }
 
   listMessages(deviceId: number, chat: string, limit = 50, beforeId?: number): StoredMessage[] {
-    const rows = (
-      beforeId
-        ? this.db
-            .prepare('SELECT * FROM messages WHERE device_id = ? AND chat = ? AND id < ? ORDER BY id DESC LIMIT ?')
-            .all(deviceId, chat, beforeId, limit)
-        : this.db.prepare('SELECT * FROM messages WHERE device_id = ? AND chat = ? ORDER BY id DESC LIMIT ?').all(deviceId, chat, limit)
-    ) as { id: number; device_id: number; chat: string; role: 'user' | 'assistant'; content: string; meta: string | null; created_at: number }[];
-    return rows
-      .reverse()
-      .map((r) => ({ id: r.id, deviceId: r.device_id, chat: r.chat, role: r.role, content: r.content, meta: r.meta, createdAt: r.created_at }));
+    return this.chats.list(deviceId, chat, limit, beforeId);
   }
 
   clearMessages(deviceId: number, chat: string): void {
-    this.db.prepare('DELETE FROM messages WHERE device_id = ? AND chat = ?').run(deviceId, chat);
+    this.chats.clear(deviceId, chat);
   }
 
   /** Drop messages older than N days (privacy hygiene). */
-  pruneMessages(days = 30): void {
-    this.db.prepare('DELETE FROM messages WHERE created_at < ?').run(Date.now() - days * 86_400_000);
+  pruneMessages(): void {
+    this.chats.prune();
+    this.db.prepare("UPDATE vault_operations SET payload = NULL WHERE state IN ('saved_local', 'committed', 'synced', 'conflict') AND updated_at <= ?").run(Date.now() - 14 * 86_400_000);
+  }
+
+  getOperation(id: string): VaultOperation | null {
+    const r = this.db.prepare('SELECT * FROM vault_operations WHERE operation_id = ?').get(id) as Record<string, unknown> | undefined;
+    return r ? {
+      operationId: String(r.operation_id), requestHash: String(r.request_hash), path: String(r.path),
+      baseHash: r.base_hash as string | null, contentHash: String(r.content_hash), payload: r.payload as string | null,
+      state: r.state as VaultOperation['state'], commitSha: r.commit_sha as string | null, errorCode: r.error_code as string | null,
+    } : null;
+  }
+
+  prepareOperation(op: VaultOperation): void {
+    const now = Date.now();
+    this.db.prepare('INSERT INTO vault_operations(operation_id, request_hash, path, base_hash, content_hash, payload, state, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(op.operationId, op.requestHash, op.path, op.baseHash, op.contentHash, op.payload, op.state, now, now);
+  }
+
+  updateOperation(id: string, state: VaultOperation['state'], commitSha: string | null = null, errorCode: string | null = null): void {
+    this.db.prepare('UPDATE vault_operations SET state = ?, commit_sha = COALESCE(?, commit_sha), error_code = ?, updated_at = ? WHERE operation_id = ?')
+      .run(state, commitSha, errorCode, Date.now(), id);
+    if (state === 'synced' || state === 'saved_local') this.db.prepare('UPDATE vault_operations SET payload = NULL WHERE operation_id = ?').run(id);
+  }
+
+  operationsIn(states: VaultOperation['state'][]): VaultOperation[] {
+    const rows = this.db.prepare('SELECT operation_id FROM vault_operations WHERE state IN (' + states.map(() => '?').join(',') + ') ORDER BY created_at, rowid').all(...states) as { operation_id: string }[];
+    return rows.map(r => this.getOperation(r.operation_id)!);
+  }
+
+  close(): void {
+    this.chats.close();
+    this.db.close();
+  }
+  getBatch(id:string):VaultBatch|null {
+    const r=this.db.prepare('SELECT * FROM vault_batches WHERE operation_id=?').get(id) as Record<string,unknown>|undefined;
+    return r?{operationId:String(r.operation_id),requestHash:String(r.request_hash),files:JSON.parse(String(r.files_json)),result:JSON.parse(String(r.result_json)),state:r.state as VaultBatch['state'],commitSha:r.commit_sha as string|null,errorCode:r.error_code as string|null}:null;
+  }
+  batchesIn(states:VaultBatch['state'][]):VaultBatch[] {
+    return (this.db.prepare('SELECT operation_id FROM vault_batches WHERE state IN ('+states.map(()=>'?').join(',')+') ORDER BY created_at,rowid').all(...states) as {operation_id:string}[]).map(r=>this.getBatch(r.operation_id)!);
+  }
+  prepareBatch(b:VaultBatch):void {const now=Date.now();this.db.prepare('INSERT INTO vault_batches VALUES(?,?,?,?,?,?,?,?,?)').run(b.operationId,b.requestHash,JSON.stringify(b.files),JSON.stringify(b.result),b.state,b.commitSha,b.errorCode,now,now);}
+  updateBatch(id:string,state:VaultBatch['state'],sha:string|null=null,error:string|null=null):void {
+    const b=this.getBatch(id)!;
+    if(state!=='prepared' && state!=='conflict')b.files=b.files.map(f=>({...f,base64:null}));
+    this.db.prepare('UPDATE vault_batches SET state=?,commit_sha=COALESCE(?,commit_sha),error_code=?,files_json=?,updated_at=? WHERE operation_id=?').run(state,sha,error,JSON.stringify(b.files),Date.now(),id);
   }
 }

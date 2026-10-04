@@ -4,12 +4,16 @@ import { VaultError } from './vault.js';
 import { searchNotes } from './search.js';
 import { appendToDaily, createNote, dailyPath, ensureDaily, extractTasks } from './notes.js';
 import { cleanForDisplay, formatDate } from './templates.js';
+import { sourceVersion } from './source-version.js';
+import type { MemorySource } from './contracts.js';
 
 export interface ToolContext {
   vault: Vault;
   /** Called when the tool changes the vault. */
   onAction?: (kind: 'created' | 'appended' | 'updated', path: string) => void;
   onSource?: (path: string) => void;
+  onSourceVersion?: (source:MemorySource) => void;
+  onReadNote?: (path:string,content:string) => void;
 }
 
 export const toolDefinitions: ToolDefinition[] = [
@@ -164,7 +168,7 @@ export async function executeTool(name: string, args: Args, ctx: ToolContext): P
           since: days ? Date.now() - days * 86_400_000 : undefined,
         });
         if (!hits.length) return 'No notes found.';
-        hits.forEach((h) => ctx.onSource?.(h.path));
+        hits.forEach((h) => {ctx.onSource?.(h.path);if(h.sourceVersion)ctx.onSourceVersion?.(h.sourceVersion);});
         return hits
           .map((h) => `- ${h.path} (modified ${formatDate(new Date(h.mtime), 'YYYY-MM-DD')})\n  ${h.snippet}`)
           .join('\n');
@@ -184,9 +188,11 @@ export async function executeTool(name: string, args: Args, ctx: ToolContext): P
           note = await vault.readNote(found[0].path);
         }
         ctx.onSource?.(note.path);
-        const text = cleanForDisplay(note.content);
+        const version=sourceVersion(note.path,note.content);ctx.onSourceVersion?.(version);
+        ctx.onReadNote?.(note.path,note.content);
+        const text = note.content;
         const truncated = text.length > MAX_NOTE_CHARS ? text.slice(0, MAX_NOTE_CHARS) + '\n…[truncated]' : text;
-        return `# ${note.path}\n\n${truncated}`;
+        return `# ${note.path}\ncontentHash: ${version.contentHash}\ncomplete: ${text.length<=MAX_NOTE_CHARS}\n\n${truncated}`;
       }
       case 'list_folder': {
         const { folders, notes } = await vault.listFolder(String(args.folder ?? ''));
@@ -212,6 +218,7 @@ export async function executeTool(name: string, args: Args, ctx: ToolContext): P
         if (!(await vault.exists(p))) return `Daily note ${p} does not exist yet.`;
         const note = await vault.readNote(p);
         ctx.onSource?.(p);
+        ctx.onSourceVersion?.(sourceVersion(p,note.content));
         return `# ${p}\n\n${cleanForDisplay(note.content)}`;
       }
       case 'append_daily': {

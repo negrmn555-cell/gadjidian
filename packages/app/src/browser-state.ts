@@ -1,0 +1,4 @@
+const PREFIX='relay.draft.';
+export function loadDrafts():Record<string,string>{const result:Record<string,string>={};try{for(const key of Object.keys(sessionStorage).filter(k=>k.startsWith(PREFIX))){try{const r=JSON.parse(sessionStorage.getItem(key)!);if(typeof r.text==='string'&&r.expiresAt>Date.now())result[key.slice(PREFIX.length)]=r.text;else sessionStorage.removeItem(key);}catch{sessionStorage.removeItem(key);}}}catch{}return result;}
+export function saveDraft(id:string,text:string,expiresAt:number):void{try{if(text&&expiresAt>Date.now())sessionStorage.setItem(PREFIX+id,JSON.stringify({text,expiresAt}));else sessionStorage.removeItem(PREFIX+id);}catch{}}
+export function clearDrafts():void{try{for(const key of Object.keys(sessionStorage).filter(k=>k.startsWith(PREFIX)))sessionStorage.removeItem(key);}catch{}}

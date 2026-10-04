@@ -7,7 +7,7 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['icon.svg'],
+      includeAssets: ['icon.svg','push-events.js'],
       manifest: {
         name: 'Obsidian Relay',
         short_name: 'Relay',
@@ -16,8 +16,8 @@ export default defineConfig({
         display: 'standalone',
         start_url: '/',
         scope: '/',
-        background_color: '#0f1115',
-        theme_color: '#0f1115',
+        background_color: '#f7f7f5',
+        theme_color: '#f7f7f5',
         icons: [
           { src: '/icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any' },
           { src: '/icon-192.png', sizes: '192x192', type: 'image/png' },
@@ -30,8 +30,10 @@ export default defineConfig({
         },
       },
       workbox: {
+        importScripts: ['/push-events.js'],
+        cacheId: 'obsidian-relay-v2',
         navigateFallback: '/index.html',
-        navigateFallbackDenylist: [/^\/api\//],
+        navigateFallbackDenylist: [/^\/api\//, /^\/assets\//],
         runtimeCaching: [{ urlPattern: /^\/api\//, handler: 'NetworkOnly' }],
       },
     }),

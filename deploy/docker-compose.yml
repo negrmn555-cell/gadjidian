@@ -5,11 +5,21 @@ services:
       dockerfile: deploy/Dockerfile
     container_name: obsidian-relay
     restart: unless-stopped
+    mem_limit: 1536m
+    pids_limit: 128
+    cpus: 2
     env_file: ../.env
     environment:
       DATA_DIR: /data
       VAULT_PATH: /data/vault
       STATIC_DIR: /app/packages/app/dist
+      NODE_OPTIONS: --max-old-space-size=512
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:8080/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     volumes:
       - relay-data:/data
       # SSH key for git remote (read-only). Generate: ssh-keygen -t ed25519 -f deploy/ssh/id_ed25519 -N ""

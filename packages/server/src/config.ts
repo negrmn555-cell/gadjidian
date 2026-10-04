@@ -13,7 +13,7 @@ export interface ServerConfig {
   staticDir: string;
   vault: VaultConfig;
   llm: LlmConfig;
-  whisperModel: string;
+  providers: { masterKey: string; keyFile: string; allowedOrigins: string[]; timeoutMs: number };
   sync: {
     /** none | git */
     mode: 'none' | 'git';
@@ -86,7 +86,12 @@ export function loadConfig(): ServerConfig {
       maxTokens: envNum('LLM_MAX_TOKENS', 0) || undefined,
       headers: env('LLM_REFERER') ? { 'HTTP-Referer': env('LLM_REFERER'), 'X-Title': 'obsidian-relay' } : undefined,
     },
-    whisperModel: env('WHISPER_MODEL', 'whisper-1'),
+    providers: {
+      masterKey: env('PROVIDER_MASTER_KEY'),
+      keyFile: env('PROVIDER_KEY_FILE', path.join(dataDir, 'secrets', 'provider-master.key')),
+      allowedOrigins: list('PROVIDER_ALLOWED_ORIGINS'),
+      timeoutMs: envNum('PROVIDER_TIMEOUT_MS', 60_000),
+    },
     sync: {
       mode: env('SYNC_MODE', 'none') === 'git' ? 'git' : 'none',
       pullInterval: envNum('SYNC_PULL_INTERVAL', 60),

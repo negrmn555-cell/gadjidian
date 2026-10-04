@@ -7,19 +7,29 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsc -p tsconfig.test.json && node --test \"dist-test/test/**/*.test.js\"",
     "dev": "tsc -p tsconfig.json && node --env-file-if-exists=../../.env dist/index.js",
     "start": "node --env-file-if-exists=../../.env dist/index.js",
     "cli": "node --env-file-if-exists=../../.env dist/cli.js"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.1",
-    "@fastify/static": "^8.0.3",
+    "@fastify/static": "^10.1.5",
     "@fastify/websocket": "^11.0.1",
+    "@napi-rs/canvas": "^1.0.10",
     "@relay/core": "0.1.0",
-    "fastify": "^5.1.0"
+    "@tesseract.js-data/eng": "^1.0.0",
+    "@tesseract.js-data/rus": "^1.0.0",
+    "fastify": "^5.12.5",
+    "fflate": "^0.8.3",
+    "pdfjs-dist": "^6.3.289",
+    "tesseract.js": "^7.0.0",
+    "web-push": "^3.6.7",
+    "yaml": "^2.9.1"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "@types/web-push": "^3.6.4",
     "@types/ws": "^8.5.13",
     "typescript": "^5.7.0"
   }

@@ -1,7 +1,11 @@
 import { useEffect, useState } from 'react';
 import { api, type Device, type SyncStatus } from '../api';
+import { ProviderSettings } from './ProviderSettings';
+import { Icon } from '../Icons';
+import { AutomationSettings,Notifications } from './AutomationSettings';
+import { GitConflicts } from './GitConflicts';
 
-export function Settings({ onBack, onLogout }: { onBack: () => void; onLogout: () => void }) {
+export function Settings({ onBack, onLogout, chatId }: { onBack: () => void; onLogout: () => void; chatId?:string }) {
   const [me, setMe] = useState<Awaited<ReturnType<typeof api.me>> | null>(null);
   const [devices, setDevices] = useState<Device[]>([]);
   const [code, setCode] = useState<{ code: string; expiresAt: number } | null>(null);
@@ -25,19 +29,19 @@ export function Settings({ onBack, onLogout }: { onBack: () => void; onLogout: (
     <div className="screen">
       <div className="header">
         <button className="icon-btn" onClick={onBack} aria-label="Назад">
-          ←
+          <Icon name="back" />
         </button>
         <span className="title">Настройки</span>
       </div>
       <div className="settings">
         {err && <div className="error">{err}</div>}
+        <ProviderSettings onUnauthorized={onLogout} />
+        <AutomationSettings onUnauthorized={onLogout}/>
+        <Notifications onUnauthorized={onLogout}/>
+        <GitConflicts onUnauthorized={onLogout}/>
 
         <div className="card">
           <h3>Связь</h3>
-          <div className="row">
-            <span className="muted">Модель</span>
-            <span>{me?.model ?? '…'}</span>
-          </div>
           <div className="row">
             <span className="muted">Входящие</span>
             <span>{me?.vault.inbox || '/'}</span>
@@ -132,8 +136,8 @@ export function Settings({ onBack, onLogout }: { onBack: () => void; onLogout: (
 
         <div className="card">
           <h3>Это устройство</h3>
-          <button className="btn secondary small" onClick={() => api.clearMessages().then(onBack)}>
-            Очистить историю чата
+          <button className="btn secondary small" disabled={!chatId} onClick={() => { if(chatId && confirm('Очистить сообщения и временные файлы текущего чата?'))void api.clearMessages(chatId).then(onBack).catch(e=>setErr(e.message)); }}>
+            Очистить текущий чат
           </button>{' '}
           <button className="btn danger small" onClick={() => { if (confirm('Выйти на этом устройстве?')) onLogout(); }}>
             Выйти

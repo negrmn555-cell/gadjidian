@@ -10,13 +10,13 @@
   ],
   "scripts": {
     "build": "npm run build -w @relay/core && npm run build -w @relay/server && npm run build -w @relay/app",
-    "test": "npm run test -w @relay/core",
+    "test": "npm run test -w @relay/core && npm run test -w @relay/server",
     "dev:server": "npm run dev -w @relay/server",
     "dev:app": "npm run dev -w @relay/app",
     "start": "npm run start -w @relay/server",
     "typecheck": "npm run typecheck -w @relay/core && npm run typecheck -w @relay/server && npm run typecheck -w @relay/app"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.13"
   }
 }

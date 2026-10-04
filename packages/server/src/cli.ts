@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { loadConfig } from './config.js';
 import { Db } from './db.js';
+import {ProviderSecrets} from './provider-secrets.js';
+import {WriterLock} from './writer-lock.js';
 
 const HELP = `obsidian-relay CLI
 
@@ -9,13 +11,16 @@ const HELP = `obsidian-relay CLI
   relay revoke <id>          disconnect one device
   relay reset                revoke all devices and codes
   relay quick-key [folder]   create a quick-capture key (for Shortcuts / widgets)
+  relay rotate-key           rotate encrypted credentials while the server is stopped
 `;
 
 async function main(): Promise<void> {
   const [cmd, arg] = process.argv.slice(2);
   const cfg = loadConfig();
   const db = await Db.open(cfg.dbPath);
+  try {
   switch (cmd) {
+    case 'rotate-key':{const lock=await WriterLock.acquire(cfg.vault.root);try{console.log('Encrypted records rotated:',(await ProviderSecrets.rotate(cfg,db)).rotated);}finally{await lock.release();}break;}
     case 'code': {
       const { code, expiresAt } = db.createPairingCode();
       console.log(`Pairing code: ${code}`);
@@ -51,6 +56,7 @@ async function main(): Promise<void> {
     default:
       console.log(HELP);
   }
+  } finally {db.close();}
 }
 
 main().catch((e) => {
