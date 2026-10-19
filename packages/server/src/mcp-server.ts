@@ -65,7 +65,7 @@ export function registerMcp(app:FastifyInstance,cfg:ServerConfig,db:Db,vault:Vau
         let timer:NodeJS.Timeout|undefined,onAbort:()=>void=()=>{};
         try{
           const result=await Promise.race([executeTool(name,args,{vault,exactPathsOnly:true}),new Promise<never>((_,reject)=>{onAbort=()=>reject(new Error('CANCELLED'));signal.addEventListener('abort',onAbort,{once:true});if(signal.aborted)onAbort();timer=setTimeout(()=>reject(new Error('TIMEOUT')),timeout);timer.unref();})]);
-          guard();signal.throwIfAborted();if(/^Error[: (]|^Note not found:/.test(result))throw new Error('READ_FAILED');
+          guard();signal.throwIfAborted();if(/^Error[: (]|^Note not found:/.test(result)||name==='search_notes'&&JSON.parse(result).status==='error')throw new Error('READ_FAILED');
           return {content:[{type:'text',text:'<untrusted_vault_data>\n'+result.slice(0,toolSpec(name).outputChars)+'\n</untrusted_vault_data>'}]};
         }finally{if(timer)clearTimeout(timer);signal.removeEventListener('abort',onAbort);}
       }catch{return {isError:true,content:[{type:'text',text:'Чтение не выполнено: проверьте путь, права доступа, срок ключа и ограничения запроса. Записи не выполнялись.'}]};}

@@ -4,7 +4,7 @@ import { createTool } from '@mastra/core/tools';
 import { noopLogger } from '@mastra/core/logger';
 import { z } from 'zod';
 import type { LanguageModelV2, LanguageModelV2CallOptions, LanguageModelV2Content, LanguageModelV2StreamPart } from '@ai-sdk/provider-v5';
-import { DomainError, type AgentLoop, type ChatMessage, type ChatCompletionResult } from '@relay/core';
+import { AgentRunControl, validateToolArgs, DomainError, type AgentLoop, type ChatMessage, type ChatCompletionResult } from '@relay/core';
 
 /** Uses the already bound profile client: no environment credentials, SDK fetch or retries. */
 export const mastraLoop: AgentLoop = async input => {
@@ -13,14 +13,17 @@ export const mastraLoop: AgentLoop = async input => {
   let steps = 0, tokens = 0, last: ChatCompletionResult | undefined;
   let failure: unknown;
   const native = new Map<string, unknown[]>();
+  const control = input.control ?? new AgentRunControl();
   async function complete(options: LanguageModelV2CallOptions, onDelta?: (text: string) => void) {
     if (failure) throw failure;
-    if (++steps > input.maxSteps) throw new DomainError('RUN_STEP_BUDGET', 'Исчерпан лимит шагов.');
+    if (++steps > 6) throw new DomainError('RUN_STEP_BUDGET', 'Исчерпан лимит шагов.');
+    const final = control.finalStep(steps,input.maxSteps);
     runSignal.throwIfAborted();
     const messages: ChatMessage[] = [];
     for (const m of options.prompt) {
       if (m.role === 'system') { messages.push({ role: 'system', content: m.content }); continue; }
       if (m.role === 'tool') {
+        if(m.content.some(p=>p.output.type==='error-text'||p.output.type==='error-json')) throw new DomainError('TOOL_FAILED','Инструмент отклонил некорректный вызов. Ничего не записано.');
         for (const p of m.content) messages.push({ role: 'tool', tool_call_id: p.toolCallId, content: p.output.type === 'text' || p.output.type === 'error-text' ? p.output.value : JSON.stringify(p.output.value) });
         continue;
       }
@@ -36,13 +39,15 @@ export const mastraLoop: AgentLoop = async input => {
     }
     const estimated = messages.reduce((n,m) => n + (m.content?.length ?? 0), 0);
     if (tokens + estimated / 2 > 48_000) throw new DomainError('RUN_TOKEN_BUDGET', 'Контекст превысил бюджет запроса.');
-    const tools = steps === input.maxSteps ? undefined : options.tools?.filter(t => t.type === 'function').map(t => ({ type: 'function' as const, function: { name: t.name, description: t.description ?? '', parameters: t.inputSchema as Record<string, unknown> } }));
+    if(final) messages.push({role:'system',content:control.reminder()});
+    const tools = final ? undefined : options.tools?.filter(t => t.type === 'function').map(t => ({ type: 'function' as const, function: { name: t.name, description: t.description ?? '', parameters: t.inputSchema as Record<string, unknown> } }));
     last = await input.llm.chat(messages, tools, AbortSignal.any([runSignal,...(options.abortSignal?[options.abortSignal]:[])]), { onDelta, maxTokens: 4096 });
     if(last.usage)input.onUsage?.(last.usage);
     tokens += (last.usage?.promptTokens ?? Math.ceil(estimated / 2)) + (last.usage?.completionTokens ?? Math.ceil((last.message.content?.length ?? 0) / 2));
     if (tokens > 48_000) throw new DomainError('RUN_TOKEN_BUDGET', 'Исчерпан бюджет токенов запроса.');
+    if(!final)for(const call of last.message.tool_calls??[]){const tool=input.tools.find(t=>t.function.name===call.function.name);if(!tool)throw new DomainError('TOOL_UNAVAILABLE','Инструмент недоступен.');validateToolArgs(JSON.parse(call.function.arguments),tool.function.parameters);}
     if (last.message.nativeParts) for (const c of last.message.tool_calls ?? []) native.set(c.id, last.message.nativeParts);
-    if (steps === input.maxSteps && last.message.tool_calls?.length) throw new DomainError('RUN_STEP_BUDGET', 'Модель превысила лимит шагов.');
+    if (final && last.message.tool_calls?.length) last={...last,message:{role:'assistant',content:control.fallback()},finishReason:'stop'};
     return last;
   }
   function content(result: ChatCompletionResult): LanguageModelV2Content[] {
@@ -78,7 +83,7 @@ export const mastraLoop: AgentLoop = async input => {
   const runtime = new Mastra({ agents: { relay: agent }, logger: false });
   const messages = input.messages.filter(m => m.role !== 'system').map(m => (m.role === 'assistant' ? {role:'assistant' as const,content:m.content??''} : { role: 'user' as const, content: m.parts ? m.parts.map(p => p.type === 'text' ? p : p.type==='file'?{type:'file' as const,data:new URL(p.file.file_data),mediaType:'application/pdf'}:{ type: 'image' as const, image: new URL(p.image_url.url) }) : m.content ?? '' }));
   try {
-    const output = await runtime.getAgent('relay').stream(messages, { maxSteps: input.maxSteps, abortSignal: runSignal, toolCallConcurrency: 2, modelSettings: { maxRetries: 0, timeout: { totalMs: 120_000, firstChunkMs: 30_000 } } });
+    const output = await runtime.getAgent('relay').stream(messages, { maxSteps: 6, abortSignal: runSignal, toolCallConcurrency: 2, modelSettings: { maxRetries: 0, timeout: { totalMs: 120_000, firstChunkMs: 30_000 } } });
     for await (const text of output.textStream) input.emit({ type: 'delta', text });
     const text = await output.text;
     input.signal?.throwIfAborted();

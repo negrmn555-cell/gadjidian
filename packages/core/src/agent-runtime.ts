@@ -9,9 +9,54 @@ export interface AgentLoopInput {
   emit: (event: AgentEvent) => void;
   signal?: AbortSignal;
   maxSteps: number;
+  control?: AgentRunControl;
   onUsage?: (usage: { promptTokens: number; completionTokens: number }) => void;
 }
 export type AgentLoop = (input: AgentLoopInput) => Promise<ChatCompletionResult>;
+
+export const completionRules = `Отсутствие информации — нормальный результат. Отвечай только по найденным данным, не выдумывай отсутствующие факты. Если запрос существенно неоднозначен, задай один конкретный уточняющий вопрос с вариантами; перед записью обязательно уточни объект и требуемое изменение. Не делай запись ради ответа на поисковый вопрос.
+search_notes возвращает JSON: status=ok/empty/error, returnedCount, hasMore, results с path/chunkId. Пустой поиск означает отсутствие совпадений по этой формулировке, а не отсутствие информации во всём хранилище. После пустого поиска допустима одна осмысленная переформулировка (синонимы, исправление опечатки, более широкий запрос). После двух поисков без новых источников остановись: ответь по найденному или уточни вопрос. Ошибку инструмента назови ошибкой проверки, не отсутствием информации. Если заметка найдена, но нужного факта в прочитанном тексте нет, скажи именно это. Не повторяй одинаковые вызовы. Если данных достаточно, сразу отвечай.`;
+
+/** Per-run local state; it never makes a classification call or stores note content. */
+export class AgentRunControl {
+  private sources = new Set<string>();
+  private reads = new Set<string>();
+  private noProgress = 0;
+  private progress = false;
+  private extended = false;
+  reason: 'search_exhausted' | 'tool_error' | 'step_limit' | undefined;
+  observe(name: string, args: Record<string, unknown>, output: string) {
+    if (/^Error[: (]/.test(output)) { this.reason = 'tool_error'; this.progress = false; return; }
+    if (name === 'search_notes') {
+      const result = JSON.parse(output);
+      if (result.status === 'error') { this.reason = 'tool_error'; this.progress = false; return; }
+      let added = 0;
+      for (const hit of result.results ?? []) {
+        const id = JSON.stringify([hit.path, hit.chunkId]);
+        if (!this.sources.has(id)) { this.sources.add(id); added++; }
+      }
+      this.progress = added > 0;
+      this.noProgress = added ? 0 : this.noProgress + 1;
+      if (this.noProgress >= 2) this.reason = 'search_exhausted';
+    } else {
+      const key = JSON.stringify([name, args]);
+      this.progress = !this.reads.has(key); this.reads.add(key);
+    }
+  }
+  finalStep(step: number, base: number): boolean {
+    if (this.reason) return true;
+    if (step < base) return false;
+    if (step === base && base >= 4 && base < 6 && this.progress) this.extended = true;
+    if (step < (this.extended ? 6 : base)) return false;
+    this.reason = 'step_limit'; return true;
+  }
+  reminder() {
+    return 'Это финальное обращение. Инструменты отключены. Дай ответ по уже полученным данным; укажи, что не удалось проверить, или задай один уточняющий вопрос. Не утверждай, что запись выполнена без подтверждения инструмента. Причина завершения: ' + this.reason;
+  }
+  fallback() {
+    return this.reason === 'tool_error' ? 'Не удалось проверить информацию из-за ошибки инструмента. Достоверный ответ пока дать не могу. Повторите запрос позже.' : this.reason === 'search_exhausted' ? 'По выполненным поискам не удалось получить новые данные для ответа. Уточните формулировку или укажите нужную заметку.' : 'Не удалось завершить проверку всех данных за один запрос. Уточните, какую часть вопроса разобрать в первую очередь.';
+  }
+}
 
 export interface ToolSpec { name: string; effect: 'read' | 'write'; timeoutMs: number; outputChars: number }
 export function toolSpec(name: string): ToolSpec {
@@ -76,19 +121,22 @@ export function validateToolArgs(value: unknown, schema: Record<string, any>): a
 }
 
 export const legacyLoop: AgentLoop = async input => {
+  const control = input.control ?? new AgentRunControl();
   let ordinal=0;
   let usage = { promptTokens: 0, completionTokens: 0 };
-  for (let step = 0; step < input.maxSteps; step++) {
+  for (let step = 0; step < 6; step++) {
     input.signal?.throwIfAborted();
     const estimated=input.messages.reduce((n,m)=>n+(m.content?.length??0),0)/2;
     if(usage.promptTokens+usage.completionTokens+estimated>48_000)throw new Error('Исчерпан бюджет токенов запроса.');
-    const result = await input.llm.chat(input.messages, step === input.maxSteps - 1 ? undefined : input.tools, input.signal, { maxTokens:4096,onDelta: text => input.emit({ type: 'delta', text }) });
+    const final = control.finalStep(step + 1, input.maxSteps);
+    if (final) input.messages.push({role:'system',content:control.reminder()});
+    const result = await input.llm.chat(input.messages, final ? undefined : input.tools, input.signal, { maxTokens:4096,onDelta: text => input.emit({ type: 'delta', text }) });
     if(result.usage)input.onUsage?.(result.usage);
     if (result.usage) { usage.promptTokens += result.usage.promptTokens; usage.completionTokens += result.usage.completionTokens; }
     else {usage.promptTokens+=Math.ceil(estimated);usage.completionTokens+=Math.ceil((result.message.content?.length??0)/2);}
     if(usage.promptTokens+usage.completionTokens>48_000)throw new Error('Исчерпан бюджет токенов запроса.');
     if (!result.message.tool_calls?.length) return { ...result, usage };
-    if (step === input.maxSteps - 1) throw new Error('Модель превысила лимит шагов.');
+    if (final) return {...result,message:{role:'assistant',content:control.fallback()},usage};
     input.messages.push(result.message);
     for (const call of result.message.tool_calls) {
       const args: unknown = JSON.parse(call.function.arguments);

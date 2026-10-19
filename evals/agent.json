@@ -107,6 +107,83 @@
           "value": "const r=JSON.parse(output);\nreturn r.outcome==='success' && r.taskCount===1 && r.actions===1;"
         }
       ]
+    },
+    {
+      "vars": {
+        "scenario": "stop-missing"
+      },
+      "assert": [
+        {
+          "value": "const r=JSON.parse(output);\nreturn r.outcome==='success' && r.actions===0 && r.taskCount===0 && r.providerCalls===3 && r.text.includes('не найден') && !/2030|бюджета шагов/.test(r.text);",
+          "type": "javascript"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "scenario": "stop-synonym"
+      },
+      "assert": [
+        {
+          "value": "const r=JSON.parse(output);\nreturn r.outcome==='success' && r.actions===0 && r.taskCount===0 && r.providerCalls===4 && r.text.includes('энергию света') && !/2030|бюджета шагов/.test(r.text);",
+          "type": "javascript"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "scenario": "stop-typo"
+      },
+      "assert": [
+        {
+          "value": "const r=JSON.parse(output);\nreturn r.outcome==='success' && r.actions===0 && r.taskCount===0 && r.providerCalls===4 && r.text.includes('энергию света') && !/2030|бюджета шагов/.test(r.text);",
+          "type": "javascript"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "scenario": "stop-ambiguous"
+      },
+      "assert": [
+        {
+          "value": "const r=JSON.parse(output);\nreturn r.outcome==='success' && r.actions===0 && r.taskCount===0 && r.providerCalls===1 && r.text.includes('Какую заметку') && !/2030|бюджета шагов/.test(r.text);",
+          "type": "javascript"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "scenario": "stop-several"
+      },
+      "assert": [
+        {
+          "value": "const r=JSON.parse(output);\nreturn r.outcome==='success' && r.actions===0 && r.taskCount===0 && r.providerCalls===2 && r.text.includes('несколько') && !/2030|бюджета шагов/.test(r.text);",
+          "type": "javascript"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "scenario": "stop-error"
+      },
+      "assert": [
+        {
+          "value": "const r=JSON.parse(output);\nreturn r.outcome==='success' && r.actions===0 && r.taskCount===0 && r.providerCalls===2 && r.text.includes('Ошибка поиска') && !/2030|бюджета шагов/.test(r.text);",
+          "type": "javascript"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "scenario": "stop-read-missing"
+      },
+      "assert": [
+        {
+          "value": "const r=JSON.parse(output);\nreturn r.outcome==='success' && r.actions===0 && r.taskCount===0 && r.providerCalls===3 && r.text.includes('не указана') && !/2030|бюджета шагов/.test(r.text);",
+          "type": "javascript"
+        }
+      ]
     }
   ]
 }

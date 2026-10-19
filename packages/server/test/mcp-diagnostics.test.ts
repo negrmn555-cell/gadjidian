@@ -33,7 +33,7 @@ function text(result:Awaited<ReturnType<Client['callTool']>>){return (result.con
 
 test('real MCP client discovers only read tools, searches Russian notes and reads a source section',async t=>{
   const f=await fixture(t),key=await f.key(),client=await f.connect(key.token),tools=await client.listTools();assert.deepEqual(tools.tools.map(t=>t.name).sort(),['read_note','read_section','search_notes']);assert(tools.tools.every(t=>t.annotations?.readOnlyHint));
-  const search=await client.callTool({name:'search_notes',arguments:{query:'фотосинтез',limit:3}});assert(!search.isError);assert.match(text(search),/Resources\/Фотосинтез.md/);const chunk=/chunkId: ([^)\s]+)/.exec(text(search))![1];
+  const search=await client.callTool({name:'search_notes',arguments:{query:'фотосинтез',limit:3}});assert(!search.isError);assert.match(text(search),/Resources\/Фотосинтез.md/);const envelope=JSON.parse(text(search).replace(/^<untrusted_vault_data>\n|\n<\/untrusted_vault_data>$/g,''));assert.equal(envelope.status,'ok');const chunk=envelope.results[0].chunkId;
   const section=await client.callTool({name:'read_section',arguments:{path:'Resources/Фотосинтез.md',chunkId:chunk}});assert(!section.isError);assert.match(text(section),/contentHash:/);
   const note=await client.callTool({name:'read_note',arguments:{path:'Resources/Фотосинтез.md'}});assert(!note.isError);assert.match(text(note),/Растения используют/);assert.match(text(note),/untrusted_vault_data/);
   assert.equal(f.db.sql.prepare('SELECT COUNT(*) AS n FROM vault_operations').get()!.n,0);

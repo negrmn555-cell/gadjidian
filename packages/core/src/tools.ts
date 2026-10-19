@@ -27,7 +27,7 @@ export const toolDefinitions: ToolDefinition[] = [
     function: {
       name: 'search_notes',
       description:
-        'Search the vault by keywords. Returns best-matching notes with snippets. Use for any question about what the user wrote.',
+        'Search the vault by keywords. Returns JSON status ok/empty/error, returnedCount, hasMore and results with path, chunkId, snippet. Empty results are not proof that the fact does not exist. Retry once with a meaningful reformulation, then answer or clarify.',
       parameters: {
         type: 'object',
         properties: {
@@ -170,16 +170,18 @@ async function executeToolInternal(name: string, args: Args, ctx: ToolContext): 
       case 'search_notes': {
         const query = String(args.query ?? '');
         const days = typeof args.days === 'number' ? args.days : undefined;
-        const hits = await searchNotes(vault, query, {
+        const limit = Math.max(1, Math.min(20, Math.floor(Number(args.limit) || 8)));
+        const candidates = await searchNotes(vault, query, {
           folder: typeof args.folder === 'string' ? args.folder : undefined,
-          limit: typeof args.limit === 'number' ? args.limit : 8,
+          limit: limit + 1,
           since: days ? Date.now() - days * 86_400_000 : undefined,
         });
-        if (!hits.length) return 'No notes found.';
+        const hits = candidates.slice(0, limit);
         hits.forEach((h) => {ctx.onSource?.(h.path);if(h.sourceVersion)ctx.onSourceVersion?.(h.sourceVersion);});
-        return hits
-          .map((h) => `- ${h.path} (modified ${formatDate(new Date(h.mtime), 'YYYY-MM-DD')}; chunkId: ${h.chunkId ?? ''})\n  ${h.snippet}`)
-          .join('\n');
+        const result = {status:hits.length?'ok':'empty',returnedCount:hits.length,hasMore:candidates.length>limit,truncated:false,results:hits.map(h=>({path:h.path,chunkId:h.chunkId??null,snippet:h.snippet.slice(0,400)}))};
+        while(JSON.stringify(result).length>15_000&&result.results.length){result.results.pop();result.hasMore=true;result.truncated=true;}
+        result.returnedCount=result.results.length;
+        return JSON.stringify(result);
       }
       case 'read_section': {
         const note = await vault.readNote(String(args.path ?? ''));
@@ -200,7 +202,7 @@ async function executeToolInternal(name: string, args: Args, ctx: ToolContext): 
           const found = await vault.findByTitle(p);
           if (found.length === 0) return `Note not found: ${p}`;
           if (found.length > 1) {
-            return `Several notes match "${p}":\n${found.slice(0, 10).map((f) => `- ${f.path}`).join('\n')}\nAsk the user which one, or read the most likely.`;
+            return `Several notes match "${p}":\n${found.slice(0, 10).map((f) => `- ${f.path}`).join('\n')}\nAsk the user which one before modifying anything; do not guess the target.`;
           }
           note = await vault.readNote(found[0].path);
         }
@@ -298,6 +300,7 @@ async function executeToolInternal(name: string, args: Args, ctx: ToolContext): 
         return `Unknown tool: ${name}`;
     }
   } catch (e) {
+    if (name === 'search_notes') return JSON.stringify({status:'error',returnedCount:0,hasMore:false,truncated:false,results:[],error:{code:e instanceof VaultError?e.code:'SEARCH_FAILED',message:'Search failed; this does not mean the information is absent.'}});
     if (e instanceof VaultError) return `Error (${e.code}): ${e.message}`;
     return `Error: ${(e as Error).message}`;
   }
