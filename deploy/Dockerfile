@@ -27,9 +27,8 @@ WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=build /src/package.json ./
 COPY --from=production-deps /src/node_modules ./node_modules
-COPY --from=build /src/packages/core/package.json ./packages/core/
+COPY --from=production-deps /src/packages ./packages
 COPY --from=build /src/packages/core/dist ./packages/core/dist
-COPY --from=build /src/packages/server/package.json ./packages/server/
 COPY --from=build /src/packages/server/dist ./packages/server/dist
 COPY --from=build /src/packages/app/dist ./packages/app/dist
 RUN mkdir -p /data && chown node:node /data
