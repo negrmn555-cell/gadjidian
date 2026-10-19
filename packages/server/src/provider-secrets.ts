@@ -24,7 +24,7 @@ export class ProviderSecrets {
       catch (e) { if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e; }
       if ((await fs.lstat(file)).isSymbolicLink()) throw new DomainError('MASTER_KEY_LOCATION', 'Файл ключа не должен быть символической ссылкой.', 500);
       key = await fs.readFile(file);
-      if(key[0]===123){let ring:{current:string;previous:string[]};try{ring=JSON.parse(key.toString('utf8'));if(typeof ring.current!=='string'||!Array.isArray(ring.previous)||ring.previous.length>8)throw new Error();const current=Buffer.from(ring.current,'base64'),previous=ring.previous.map(k=>Buffer.from(k,'base64'));if([current,...previous].some(k=>k.length!==32))throw new Error();return new ProviderSecrets(current,previous);}catch{throw new DomainError('MASTER_KEY_INVALID','Некорректный файл ключей сервера.',500);}}
+      if(key.length!==32&&key[0]===123){let ring:{current:string;previous:string[]};try{ring=JSON.parse(key.toString('utf8'));if(typeof ring.current!=='string'||!Array.isArray(ring.previous)||ring.previous.length>8)throw new Error();const current=Buffer.from(ring.current,'base64'),previous=ring.previous.map(k=>Buffer.from(k,'base64'));if([current,...previous].some(k=>k.length!==32))throw new Error();return new ProviderSecrets(current,previous);}catch{throw new DomainError('MASTER_KEY_INVALID','Некорректный файл ключей сервера.',500);}}
     }
     if (key.length !== 32) throw new DomainError('MASTER_KEY_INVALID', 'Некорректный ключ шифрования профилей.', 500);
     return new ProviderSecrets(key);

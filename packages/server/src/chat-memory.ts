@@ -1,4 +1,4 @@
-import { hashContent, parseModeJson, sourceVersion, type ChatMemory, type MemorySource, type Vault, type LlmClient, type AgentResult } from '@relay/core';
+import { hashContent, parseModeJson, sourceVersion, getSearchIndex, type ChatMemory, type MemorySource, type Vault, type LlmClient, type AgentResult } from '@relay/core';
 import type { ChatStore } from './chat-store.js';
 import type { StoredMessage } from './db.js';
 
@@ -8,6 +8,7 @@ const meta=(m:StoredMessage):{sourceVersions?:MemorySource[];sources?:string[];a
 export class ChatMemoryService {
   constructor(private readonly store:ChatStore,private readonly vault:Vault){}
   async inspect(device:number,chat:string):Promise<ChatMemory>{
+    const generation=this.store.memoryGeneration(device,chat),revision=this.store.memoryRevision(device,chat);
     const memory=this.store.memory(device,chat);let invalid=false;
     const live=this.store.since(device,chat,0,100_000),byId=new Map(live.map(m=>[m.id,m]));
     if(memory.coverage.some(c=>!byId.has(c.id)||messageHash(byId.get(c.id)!)!==c.hash))invalid=true;
@@ -16,7 +17,7 @@ export class ChatMemoryService {
       let found:{path:string;content:string}|undefined;
       try{const n=await this.vault.readNote(ref.path),v=sourceVersion(n.path,n.content);if(!ref.noteId||v.noteId===ref.noteId)found=n;}catch{}
       if(!found&&ref.noteId){
-        if(!index){index=new Map();for(const n of await this.vault.listNotes()){try{const full=await this.vault.readNote(n.path),v=sourceVersion(n.path,full.content);if(v.noteId)index.set(v.noteId,[...(index.get(v.noteId)??[]),full]);}catch{}}}
+        if(!index){index=new Map();for(const {parsed} of await getSearchIndex(this.vault).documents()){if(parsed.noteId)index.set(parsed.noteId,[...(index.get(parsed.noteId)??[]),{path:parsed.path,content:parsed.content}]);}}
         const matches=index.get(ref.noteId)??[];if(matches.length===1)found=matches[0];
       }
       const state=!found?'missing':hashContent(found.content)!==ref.contentHash?'changed':found.path!==ref.path?'renamed':'current';
@@ -25,7 +26,8 @@ export class ChatMemoryService {
       ref.state=state;ref.checkedAt=Date.now();if(found&&state==='renamed')ref.path=found.path;
     }
     if(invalid){memory.summary='';memory.throughMessageId=0;memory.coverage=[];}
-    this.store.saveMemory(device,chat,memory);return memory;
+    if(this.store.memoryGeneration(device,chat)!==generation||this.store.memoryRevision(device,chat)!==revision)return this.store.memory(device,chat);
+    if(invalid)this.store.saveMemory(device,chat,memory,revision);return memory;
   }
   private safeMessage(m:StoredMessage,memory:ChatMemory):string {
     const refs=meta(m).sourceVersions??[];
@@ -33,8 +35,10 @@ export class ChatMemoryService {
     if(meta(m).error)return '[Запрос завершился ошибкой; факты не подтверждены.]';
     return m.role==='assistant'&&stale?'[Предыдущий ответ опирался на изменённый или удалённый источник; содержание исключено. Прочитай актуальную заметку.]':m.content;
   }
-  async context(device:number,chat:string,llm:LlmClient|null,signal:AbortSignal,force=false,remainingBatches=4):Promise<{memory:ChatMemory;history:{role:'user'|'assistant';content:string}[];context:string}> {
+  async context(device:number,chat:string,llm:LlmClient|null,signal:AbortSignal,force=false,remainingBatches=4,guard:()=>void=()=>{}):Promise<{memory:ChatMemory;history:{role:'user'|'assistant';content:string}[];context:string}> {
+    const generation=this.store.memoryGeneration(device,chat);
     let memory=await this.inspect(device,chat);
+    const revision=this.store.memoryRevision(device,chat);
     const pending=this.store.since(device,chat,memory.throughMessageId,100_000);
     const count=force?pending.length:Math.max(0,pending.length-10);
     const checkpoint=memory.throughMessageId;
@@ -48,12 +52,20 @@ export class ChatMemoryService {
       }catch{}}
       if(!summary)summary=(memory.summary+'\n'+chunk.map(m=>(m.role==='user'?'Запрос: ':'Ответ: ')+this.safeMessage(m,memory).replace(/\s+/g,' ').slice(0,220)).join('\n')).slice(-6000).trim();
       const current=await this.inspect(device,chat),currentRows=this.store.since(device,chat,0,100_000),hashes=new Map(currentRows.map(m=>[m.id,messageHash(m)]));
-      if(current.throughMessageId===memory.throughMessageId && chunk.every(m=>hashes.get(m.id)===messageHash(m)) && sourceHash(current)===sourceHash(memory)){
+      guard();
+      if(!signal.aborted && this.store.memoryGeneration(device,chat)===generation && this.store.memoryRevision(device,chat)===revision && current.throughMessageId===memory.throughMessageId && chunk.every(m=>hashes.get(m.id)===messageHash(m)) && sourceHash(current)===sourceHash(memory)){
         memory={...current,summary,throughMessageId:chunk.at(-1)!.id,coverage:[...current.coverage,...chunk.map(m=>({id:m.id,hash:messageHash(m)}))],expiresAt:Math.min(current.expiresAt,...chunk.map(m=>m.createdAt+14*86_400_000))};this.store.saveMemory(device,chat,memory);
       }else memory=current;
     }
     const tail=this.store.since(device,chat,memory.throughMessageId,100_000);
     if(remainingBatches>1&&!signal.aborted&&memory.throughMessageId>checkpoint&&tail.length>(force?0:10))return this.context(device,chat,llm,signal,force,remainingBatches-1);
+    return this.renderContext(device,chat,memory);
+  }
+  async readContext(device:number,chat:string):Promise<{memory:ChatMemory;history:{role:'user'|'assistant';content:string}[];context:string}> {
+    return this.renderContext(device,chat,await this.inspect(device,chat));
+  }
+  private renderContext(device:number,chat:string,memory:ChatMemory) {
+    const tail=this.store.since(device,chat,memory.throughMessageId,100_000);
     const recent=tail.slice(-10).map(m=>({role:m.role,content:this.safeMessage(m,memory)}));
     let context='';if(memory.summary)context+='Краткое резюме прошлых реплик (кэш):\n'+memory.summary;
     if(memory.sources.length)context+='\n\nИсточники этого чата:\n'+memory.sources.map(s=>s.path+' · '+s.state+' · '+s.contentHash).join('\n');

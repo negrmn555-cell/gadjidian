@@ -1,0 +1,11 @@
+{
+  "node": "v24.19.0",
+  "platform": "win32",
+  "install": "npm ci --omit=dev --ignore-scripts",
+  "isolatedDirectory": true,
+  "health": true,
+  "authenticatedNoteCreation": true,
+  "indexedSearch": true,
+  "externalLlm": false,
+  "dockerBuild": false
+}

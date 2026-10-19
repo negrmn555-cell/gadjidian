@@ -1,0 +1,37 @@
+{
+  "node": "v24.19.0",
+  "platform": "win32",
+  "engine": "mastra",
+  "model": "synthetic-model-v1",
+  "externalLlm": false,
+  "collector": "local HTTP OTLP JSON fixture",
+  "results": [
+    {
+      "enabled": false,
+      "samples": 20,
+      "p50Ms": 44.77440000000024,
+      "p95Ms": 47.08860000000004,
+      "firstTextP95Ms": 16.87900000000036,
+      "eventLoopP95Ms": 46.399487,
+      "peakRssBytes": 288354304,
+      "providerCalls": 22,
+      "exports": 0,
+      "errors": 0,
+      "dropped": 0
+    },
+    {
+      "enabled": true,
+      "samples": 20,
+      "p50Ms": 56.201500000000124,
+      "p95Ms": 61.034200000000055,
+      "firstTextP95Ms": 21.350299999999606,
+      "eventLoopP95Ms": 34.799615,
+      "peakRssBytes": 314564608,
+      "providerCalls": 22,
+      "exports": 22,
+      "errors": 0,
+      "dropped": 0
+    }
+  ],
+  "note": "Sequential local process comparison; includes artificial 10ms model delay. Not a production/VPS or real model benchmark. RSS can include retained heap from the preceding mode."
+}

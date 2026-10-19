@@ -1,6 +1,11 @@
+import type { ExtractionReport } from '@relay/core/contracts';
+import type { PreferenceMemory, PreferenceFields, ToolProgress, MutationReceipt } from '@relay/core/contracts';
 import type { Task, LegacyTask, TaskCreateInput, TaskPatch, TaskPage, TaskWriteResult, ProviderPage, ProviderPublic, ProviderWrite, ProviderSlot, ProviderTestResult, ChatSession, ChatPage, ChatMode, ChatSendInput, Attachment, NotePage, NoteRecord, NoteCreateInput, NoteEditInput, NoteWriteResult, ImportResult, ChatMemory } from '@relay/core/contracts';
 import type { AutomationSettings,ScheduledJob,OrganizationPreview,AppNotification } from '@relay/core/contracts';
 
+export interface DocumentStatus {id:string;attachmentId:string;pages:number[];processed:number[];state:string;error:string|null}
+export interface McpKey {id:string;name:string;createdAt:number;expiresAt:number;lastSeen:number|null}
+export interface DiagnosticsStatus {enabled:boolean;configured:boolean;mode:'metadata_only';retentionDays:number;pending:number;sent:number;dropped:number;failures:number;lastSuccess:number|null;sampleCount:number;p50Ms:number|null;p95Ms:number|null;firstTextP95Ms:number|null;errors:number;rssBytes:number;eventLoopP95Ms:number;index:{revision:number;pendingChanges:number}}
 export interface Device {
   id: number;
   name: string;
@@ -21,7 +26,7 @@ export interface Message {
   role: 'user' | 'assistant';
   content: string;
   createdAt: number;
-  meta?: { sources?: string[]; actions?: Action[]; error?: boolean; path?: string; attachments?: Attachment[]; mode?: ChatMode } | null;
+  meta?: { tools?:ToolProgress[];receipts?:MutationReceipt[];outcome?:string;warnings?:string[];sources?: string[]; actions?: Action[]; error?: boolean; path?: string; attachments?: Attachment[]; mode?: ChatMode } | null;
   pending?: boolean;
   status?: string;
 }
@@ -78,6 +83,10 @@ async function req<T>(method: string, path: string, body?: unknown, raw?: { data
 }
 
 export const api = {
+  diagnostics:()=>req<DiagnosticsStatus>('GET','/api/diagnostics'),
+  mcpKeys:()=>req<{enabled:boolean;url:string;keys:McpKey[]}>('GET','/api/mcp/keys'),
+  createMcpKey:(name:string,days:number)=>req<{key:McpKey;token:string;url:string}>('POST','/api/mcp/keys',{name,days}),
+  revokeMcpKey:(id:string)=>req('DELETE','/api/mcp/keys/'+encodeURIComponent(id)),
   conflicts:()=>req<{paths:string[];mergePaths:string[]}>('GET','/api/sync/conflicts'),
   conflict:(path:string)=>req<{path:string;content:string|null;contentHash:string|null;base:string|null;ours:string|null;theirs:string|null}>('GET','/api/sync/conflicts/document?path='+encodeURIComponent(path)),
   resolveConflict:(path:string,expectedContentHash:string|null,content:string|null,operationId:string)=>req('POST','/api/sync/conflicts/resolve',{path,expectedContentHash,content,operationId}),
@@ -100,6 +109,11 @@ export const api = {
   createNote:(note:NoteCreateInput,operationId:string)=>req<NoteWriteResult>('POST','/api/notes',{note,operationId}),
   editNote:(path:string,edit:NoteEditInput,expectedContentHash:string,operationId:string)=>req<NoteWriteResult>('PATCH','/api/notes/document',{path,edit,expectedContentHash,operationId}),
   importFile:(chatId:string,fileId:string,note:{title:string;category:string},operationId:string)=>req<ImportResult>('POST','/api/attachments/'+encodeURIComponent(fileId)+'/import',{chatId,note,operationId}),
+  preferences:()=>req<PreferenceMemory>('GET','/api/preferences'),
+  savePreferences:(fields:PreferenceFields,expectedHash:string|null,operationId:string)=>req<{memory:PreferenceMemory;receipt:MutationReceipt}>('PUT','/api/preferences',{fields,expectedHash,operationId}),
+  deletePreferences:(expectedHash:string,operationId:string)=>req<{memory:PreferenceMemory;receipt:MutationReceipt}>('DELETE','/api/preferences',{expectedHash,operationId}),
+  preferenceConflicts:()=>req<{items:{operationId:string;draft:{fields:PreferenceFields};expiresAt:number}[]}>('GET','/api/preferences/conflicts'),
+  removePreferenceConflict:(id:string)=>req('DELETE','/api/preferences/conflicts/'+encodeURIComponent(id)),
   memory:(chatId:string)=>req<ChatMemory>('GET','/api/chats/'+encodeURIComponent(chatId)+'/memory'),
   summarize:(chatId:string)=>req<ChatMemory>('POST','/api/chats/'+encodeURIComponent(chatId)+'/memory',{}),
   downloadOriginal:async(assetId:string)=>{
@@ -119,6 +133,11 @@ export const api = {
   cancelDraft:(chat:ChatSession)=>req<ChatSession>('DELETE','/api/chats/'+encodeURIComponent(chat.id)+'/draft',{draftId:chat.pendingTask?.id,draftVersion:chat.pendingTask?.version}),
   upload:(chatId:string,file:File)=>req<Attachment>('POST','/api/attachments/queued?chatId='+encodeURIComponent(chatId)+'&name='+encodeURIComponent(file.name),undefined,{data:file,type:'application/octet-stream'}),
   attachment:(chatId:string,id:string)=>req<Attachment>('GET','/api/attachments/'+encodeURIComponent(id)+'?chatId='+encodeURIComponent(chatId)),
+  extraction:(chatId:string,id:string)=>req<{report:ExtractionReport|null}>('GET','/api/attachments/'+encodeURIComponent(id)+'/extraction?chatId='+encodeURIComponent(chatId)),
+  analyzeDocument:(chatId:string,id:string,pages:number[],question:string,requestId:string)=>req<DocumentStatus>('POST','/api/attachments/'+encodeURIComponent(id)+'/analyze',{chatId,pages,question,requestId}),
+  documentStatus:(chatId:string,id:string,requestId:string)=>req<DocumentStatus>('GET','/api/attachments/'+encodeURIComponent(id)+'/analysis/'+encodeURIComponent(requestId)+'?chatId='+encodeURIComponent(chatId)),
+  cancelDocument:(chatId:string,id:string,requestId:string)=>req<DocumentStatus>('POST','/api/attachments/'+encodeURIComponent(id)+'/analysis/'+encodeURIComponent(requestId)+'/cancel',{chatId}),
+  cancelExtraction:(chatId:string,id:string)=>req('POST','/api/attachments/'+encodeURIComponent(id)+'/cancel',{chatId}),
   retryAttachment:(chatId:string,id:string)=>req('POST','/api/attachments/'+encodeURIComponent(id)+'/retry',{chatId}),
   providers: () => req<ProviderPage>('GET', '/api/providers'),
   createProvider: (slot: ProviderSlot, provider: ProviderWrite) => req<ProviderPublic>('POST', '/api/providers', { slot, provider }),
@@ -138,7 +157,7 @@ export const api = {
     req<{ messages: Message[] }>('GET', `/api/messages?chat=${encodeURIComponent(chat)}${before ? `&before=${before}` : ''}`),
   clearMessages: async(chat = 'main') => {const r=await req<{ ok: true }>('DELETE', `/api/messages?chat=${encodeURIComponent(chat)}`);window.dispatchEvent(new CustomEvent('relay-clear-draft',{detail:{chat}}));return r;},
   chat: (input:ChatSendInput) => req<ChatResult>('POST', '/api/chat', input),
-  runStatus:(chatId:string,requestId:string)=>req<{state:string;artifacts:string[];result:ChatResult|null;expired:boolean}>('GET','/api/chats/'+encodeURIComponent(chatId)+'/runs/'+encodeURIComponent(requestId)),
+  runStatus:(chatId:string,requestId:string)=>req<{state:string;artifacts:string[];result:ChatResult|null;expired:boolean;snapshot:{sequence:number;text:string;status?:string;state:string;tools?:ToolProgress[]}|null}>('GET','/api/chats/'+encodeURIComponent(chatId)+'/runs/'+encodeURIComponent(requestId)),
   cancelRun:(chatId:string,requestId:string)=>req('POST','/api/chats/'+encodeURIComponent(chatId)+'/runs/'+encodeURIComponent(requestId)+'/cancel',{}),
   devices: () => req<{ devices: Device[] }>('GET', '/api/devices'),
   revoke: (id: number) => req<{ ok: true }>('DELETE', `/api/devices/${id}`),
@@ -163,6 +182,7 @@ export interface SyncStatus {
 }
 
 export interface ChatResult {
+  tools?:ToolProgress[];receipts?:MutationReceipt[];outcome?:string;warnings?:string[];
   text: string;
   sources: string[];
   actions: Action[];

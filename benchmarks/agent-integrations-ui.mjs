@@ -1,0 +1,27 @@
+import assert from 'node:assert/strict';
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
+import { createRequire } from 'node:module';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { createServer } from '../packages/server/dist/index.js';
+import { loadConfig } from '../packages/server/dist/config.js';
+import { Db } from '../packages/server/dist/db.js';
+const require=createRequire(import.meta.url),{chromium}=process.argv[2]?require(path.join(process.argv[2],'playwright')):await import('playwright');
+const parent=path.resolve('data'),root=await fs.mkdtemp(path.join(parent,'qa-integrations-')),screens=path.join(parent,'agent-integrations-screens');await fs.mkdir(screens,{recursive:true});
+const cfg=loadConfig();cfg.dataDir=root;cfg.dbPath=path.join(root,'main.sqlite');cfg.vault.root=path.join(root,'vault');cfg.staticDir=path.resolve('packages/app/dist');cfg.scenariosFile=path.join(root,'missing');cfg.providers.keyFile=path.join(root,'provider.key');cfg.llm.apiKey='';cfg.requireStandalone=false;cfg.sync={...cfg.sync,mode:'none',pullInterval:0};cfg.diagnostics={enabled:false,baseUrl:'',publicKey:'',secretKey:'',allowedOrigins:[],retentionDays:14};cfg.mcp={enabled:true};
+await fs.mkdir(path.join(cfg.vault.root,'Resources'),{recursive:true});await fs.writeFile(path.join(cfg.vault.root,'Resources/Фотосинтез.md'),'# Фотосинтез\nРастения используют энергию света.');const db=await Db.open(cfg.dbPath),paired=db.createDevice('UI fixture','app');db.close();
+const app=await createServer(cfg);await app.listen({host:'127.0.0.1',port:0});cfg.publicUrl='http://127.0.0.1:'+app.server.address().port;
+const browser=await chromium.launch({headless:true,...(process.platform==='win32'?{executablePath:path.join(process.env.ProgramFiles,'Google/Chrome/Application/chrome.exe')}:{})}),context=await browser.newContext({viewport:{width:390,height:844},reducedMotion:'reduce',serviceWorkers:'block'});await context.addInitScript(token=>localStorage.setItem('relay.token',token),paired.token);const page=await context.newPage(),errors=[],client=new Client({name:'UI verification',version:'1'});page.on('pageerror',e=>errors.push(e.message));
+try{
+  await page.goto(cfg.publicUrl);await page.getByRole('button',{name:'Открыть историю чатов',exact:true}).click();await page.getByRole('button',{name:'Настройки',exact:true}).click();await page.getByRole('heading',{name:'Поиск и чтение через MCP'}).waitFor();
+  await page.getByLabel('Название клиента',{exact:true}).fill('Codex fixture');await page.getByRole('button',{name:'Создать ключ чтения'}).click();const token=await page.getByLabel('Новый MCP-ключ',{exact:true}).inputValue();assert.match(token,/^relay_mcp_/);
+  await client.connect(new StreamableHTTPClientTransport(new URL(cfg.publicUrl+'/mcp'),{requestInit:{headers:{authorization:'Bearer '+token}}}));assert.equal((await client.listTools()).tools.length,3);const found=await client.callTool({name:'search_notes',arguments:{query:'фотосинтез'}});assert.match(found.content[0].text,/Resources/);const read=await client.callTool({name:'read_note',arguments:{path:'Resources/Фотосинтез.md'}});assert(!read.isError);assert.match(read.content[0].text,/Растения/);
+  await page.getByRole('button',{name:'Скрыть ключ'}).click();assert.equal(await page.getByLabel('Новый MCP-ключ',{exact:true}).count(),0);assert.equal(await page.evaluate(token=>JSON.stringify({...localStorage,...sessionStorage}).includes(token),token),false);
+  const viewports=[];
+  for(const width of [320,390,1440]){await page.setViewportSize({width,height:width===1440?1000:844});const overflow=await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1);assert.equal(overflow,false);viewports.push({width,overflow});await page.locator('.agent-integrations').screenshot({path:path.join(screens,'mcp-'+width+'.png')});}
+  await page.setViewportSize({width:390,height:844});await page.getByRole('button',{name:'Отозвать',exact:true}).click();await page.getByText('Доступ клиента отозван.',{exact:true}).waitFor();const rejected=await context.request.post(cfg.publicUrl+'/mcp',{headers:{authorization:'Bearer '+token,accept:'application/json, text/event-stream'},data:{jsonrpc:'2.0',id:1,method:'tools/list'}});assert.equal(rejected.status(),401);
+  await page.getByRole('button',{name:'Обновить диагностику'}).click();await page.getByText('Внешняя диагностика выключена',{exact:true}).waitFor();await page.locator('.agent-diagnostics').screenshot({path:path.join(screens,'diagnostics-390.png')});assert.deepEqual(errors,[]);
+  const result={viewports,issuedThroughUI:true,realMcpSearchReadClient:true,hiddenWithoutBrowserPersistence:true,revokedThroughUI:true,revokedKeyRejected:true,metadataOnlyStatus:true,browserErrors:errors,externalService:false};await fs.writeFile('docs/agent-integrations-ui.json',JSON.stringify(result,null,2)+'\n');console.log(JSON.stringify(result));
+}catch(error){await page.screenshot({path:path.join(screens,'failure.png'),fullPage:true,mask:[page.locator('.mcp-secret')]});throw error;}
+finally{await client.close().catch(()=>{});await browser.close();for(const socket of app.websocketServer.clients)socket.terminate();await app.close();assert.equal(path.dirname(root),parent);assert(path.basename(root).startsWith('qa-integrations-'));await fs.rm(root,{recursive:true,force:true});}

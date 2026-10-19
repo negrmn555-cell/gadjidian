@@ -12,3 +12,8 @@ export * from './commands.js';
 export * from './agent.js';
 export * from './contracts.js';
 export * from './task-document.js';
+export * from './frontmatter.js';
+export * from './markdown-document.js';
+export * from './search-index.js';
+export * from './metrics.js';
+export * from './agent-runtime.js';

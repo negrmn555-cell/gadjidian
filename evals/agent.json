@@ -1,0 +1,112 @@
+{
+  "description": "Real isolated RunService/domain evaluations with deterministic HTTP model fixtures; no paid LLM grading",
+  "prompts": [
+    "{{scenario}}"
+  ],
+  "providers": [
+    {
+      "id": "file://agent-provider.mjs",
+      "label": "Mastra",
+      "config": {
+        "engine": "mastra"
+      }
+    },
+    {
+      "id": "file://agent-provider.mjs",
+      "label": "Legacy",
+      "config": {
+        "engine": "legacy"
+      }
+    }
+  ],
+  "evaluateOptions": {
+    "maxConcurrency": 1
+  },
+  "defaultTest": {
+    "assert": [
+      {
+        "type": "javascript",
+        "value": "const r=JSON.parse(output);\nreturn r.replayed && !r.leaked;"
+      }
+    ]
+  },
+  "tests": [
+    {
+      "vars": {
+        "scenario": "search"
+      },
+      "assert": [
+        {
+          "type": "javascript",
+          "value": "const r=JSON.parse(output);\nreturn r.outcome==='success' && r.sources===1 && r.tools===2 && r.providerCalls===3 && r.actions===0;"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "scenario": "private-source"
+      },
+      "assert": [
+        {
+          "type": "javascript",
+          "value": "const r=JSON.parse(output);\nreturn r.outcome==='success' && r.sources===0 && r.actions===0;"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "scenario": "partial-write"
+      },
+      "assert": [
+        {
+          "type": "javascript",
+          "value": "const r=JSON.parse(output);\nreturn r.outcome==='partial' && r.actions===1 && r.providerCalls===2;"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "scenario": "guard-preferences"
+      },
+      "assert": [
+        {
+          "type": "javascript",
+          "value": "const r=JSON.parse(output);\nreturn r.outcome==='failed' && r.actions===0 && r.preferences==='missing';"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "scenario": "remember"
+      },
+      "assert": [
+        {
+          "type": "javascript",
+          "value": "const r=JSON.parse(output);\nreturn r.outcome==='success' && r.actions===1 && r.preferences==='ready' && r.providerCalls===0;"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "scenario": "deadline-hallucination"
+      },
+      "assert": [
+        {
+          "type": "javascript",
+          "value": "const r=JSON.parse(output);\nreturn r.taskCount===0 && r.actions===0;"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "scenario": "deadline-explicit"
+      },
+      "assert": [
+        {
+          "type": "javascript",
+          "value": "const r=JSON.parse(output);\nreturn r.outcome==='success' && r.taskCount===1 && r.actions===1;"
+        }
+      ]
+    }
+  ]
+}

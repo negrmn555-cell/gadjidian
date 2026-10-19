@@ -1,7 +1,7 @@
 {
   "name": "obsidian-relay",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Self-hosted Obsidian assistant that answers from your vault even when your PC is off",
   "workspaces": [
     "packages/core",
@@ -14,9 +14,25 @@
     "dev:server": "npm run dev -w @relay/server",
     "dev:app": "npm run dev -w @relay/app",
     "start": "npm run start -w @relay/server",
-    "typecheck": "npm run typecheck -w @relay/core && npm run typecheck -w @relay/server && npm run typecheck -w @relay/app"
+    "typecheck": "npm run typecheck -w @relay/core && npm run typecheck -w @relay/server && npm run typecheck -w @relay/app",
+    "bench:search": "node benchmarks/search.mjs indexed 1000",
+    "eval:retrieval": "node evals/run.mjs",
+    "eval:agent": "node evals/run.mjs agent",
+    "check:compatibility": "node benchmarks/mastra-compatibility.mjs"
   },
   "engines": {
     "node": ">=22.13"
+  },
+  "devDependencies": {
+    "@ai-sdk/openai-compatible": "3.0.71",
+    "@assistant-ui/react": "0.15.29",
+    "@mastra/core": "1.78.0",
+    "promptfoo": "0.124.1",
+    "zod": "4.6.7"
+  },
+  "overrides": {
+    "basic-ftp": "6.2.3",
+    "katex": "0.19.0",
+    "source-map-js": "1.2.2"
   }
 }

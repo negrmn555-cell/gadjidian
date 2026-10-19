@@ -3,7 +3,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import {AsyncLocalStorage} from 'node:async_hooks';
-import { DomainError, Vault } from '@relay/core';
+import { DomainError, Vault, recordDuration, measure, withoutMeasurements } from '@relay/core';
 import type { ServerConfig } from './config.js';
 
 const run = promisify(execFile);
@@ -24,6 +24,7 @@ export class GitSync {
   private retryAttempt = 0;
   private stopped = false;
   private publishObserver?: (head: string) => Promise<void>;
+  private changeObservers = new Set<() => void>();
   private readonly scope=new AsyncLocalStorage<{active:boolean}>();
   private readonly vault: Vault;
 
@@ -35,10 +36,21 @@ export class GitSync {
   getStatus(): SyncStatus { return { ...this.status }; }
   get mode(): 'none' | 'git' { return this.cfg.sync.mode; }
   onPublished(observer: (head: string) => Promise<void>): void { this.publishObserver = observer; }
+  onChanged(observer: () => void): () => void { this.changeObservers.add(observer); return () => this.changeObservers.delete(observer); }
+  private changed(): void { for (const observer of this.changeObservers) observer(); }
+  ensureFreshForWrite(): Promise<void> {
+    return this.exclusive(async()=>{
+      if(this.mode==='git'&&this.cfg.sync.remote&&(!this.status.lastPull||Date.now()-this.status.lastPull>=(this.cfg.sync.freshnessMs??30_000))){
+        try{await this.pull();}catch{await this.assertWritable();throw new DomainError('SYNC_UNAVAILABLE','Не удалось обновить хранилище перед записью. Повторите после восстановления синхронизации.',503);}
+      }
+      await this.assertWritable();
+    });
+  }
 
   exclusive<T>(work: () => Promise<T>): Promise<T> {
     if(this.scope.getStore()?.active)return work();
-    const guarded=()=>{const scope={active:true};return this.scope.run(scope,async()=>{try{return await work();}finally{scope.active=false;}});};
+    const queuedAt=performance.now();
+    const guarded=()=>{recordDuration('queue',performance.now()-queuedAt);const scope={active:true};return this.scope.run(scope,async()=>{try{return await work();}finally{scope.active=false;}});};
     const next = this.busy.then(guarded, guarded);
     this.busy = next.then(() => undefined, () => undefined);
     return next;
@@ -50,6 +62,7 @@ export class GitSync {
       env: { ...process.env, GIT_AUTHOR_NAME: this.cfg.sync.authorName, GIT_AUTHOR_EMAIL: this.cfg.sync.authorEmail,
         GIT_COMMITTER_NAME: this.cfg.sync.authorName, GIT_COMMITTER_EMAIL: this.cfg.sync.authorEmail, GIT_TERMINAL_PROMPT: '0' },
       maxBuffer: 16 * 1024 * 1024,
+      timeout: this.cfg.sync.timeoutMs ?? 30_000,
     });
   }
 
@@ -79,7 +92,7 @@ export class GitSync {
     if (await fs.stat(path.join(this.cfg.vault.root, '.git')).then(() => true).catch(() => false)) return;
     const entries = await fs.readdir(this.cfg.vault.root);
     if (!entries.length && this.cfg.sync.remote) {
-      await run('git', ['clone', this.cfg.sync.remote, this.cfg.vault.root], { env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
+      await run('git', ['clone', this.cfg.sync.remote, this.cfg.vault.root], { env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }, timeout: this.cfg.sync.timeoutMs ?? 30_000 });
       if (await this.head()) await this.git(['checkout', this.cfg.sync.branch]);
       else await this.git(['symbolic-ref', 'HEAD', 'refs/heads/' + this.cfg.sync.branch]);
     } else {
@@ -162,9 +175,13 @@ export class GitSync {
       const msg = (e as { stderr?: string }).stderr ?? '';
       if (!/couldn't find remote ref|no such ref/i.test(msg)) throw e;
     }
+    this.changed();
   }
 
   pull(): Promise<void> {
+    return measure('sync',()=>this.pullInternal());
+  }
+  private pullInternal(): Promise<void> {
     if (this.mode !== 'git' || !this.cfg.sync.remote) return Promise.resolve();
     return this.exclusive(async () => {
       try {
@@ -180,7 +197,7 @@ export class GitSync {
     if (this.stopped || this.mode !== 'git' || !this.cfg.sync.remote) return;
     this.status.pending = true;
     if (this.pushTimer) clearTimeout(this.pushTimer);
-    this.pushTimer = setTimeout(() => void this.push().catch(() => {}), delaySeconds * 1000);
+    this.pushTimer = setTimeout(() => void withoutMeasurements(()=>this.push().catch(() => {})), delaySeconds * 1000);
     this.pushTimer.unref();
   }
 

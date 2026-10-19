@@ -1,16 +1,14 @@
 import { createHash } from 'node:crypto';
 import { parseDocument, Document } from 'yaml';
+import { parseFrontmatter } from './frontmatter.js';
 import { DomainError, validateTaskCreate, validateTaskStatus, type Task, type TaskCreateInput, type TaskPatch } from './contracts.js';
 
 export const hashContent = (content: string): string => createHash('sha256').update(content).digest('hex');
 const ID = /^task_[a-f0-9]{32}$/;
 
 function frontmatter(content: string) {
-  const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(content);
-  if (!match) return null;
-  const doc = parseDocument(match[1], { uniqueKeys: true });
-  if (doc.errors.length) throw new DomainError('INVALID_METADATA', 'Некорректный YAML: ' + doc.errors[0].message);
-  return { doc, body: content.slice(match[0].length) };
+  const parsed = parseFrontmatter(content);
+  return parsed.hasFrontmatter ? { doc: parsed.doc, body: parsed.body } : null;
 }
 
 export function readTaskDocument(content: string, path: string): Task | null {

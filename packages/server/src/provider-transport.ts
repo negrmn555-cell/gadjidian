@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { Transform, pipeline } from 'node:stream';
 import https from 'node:https';
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
@@ -37,7 +38,10 @@ export function validateEndpointPolicy(baseUrl: string, allowedOrigins: string[]
 export function guardedTransport(allowedOrigins: string[], timeoutMs: number,
   resolveHost: (hostname: string) => Promise<{ address: string; family: number }[]> = hostname => lookup(hostname, { all: true, verbatim: true })): typeof fetch {
   return async (input, init) => {
-    const url = validateEndpointPolicy(String(input), allowedOrigins);
+    const url = new URL(String(input));
+    const policyUrl = new URL(url);
+    if (policyUrl.search === '?alt=sse') policyUrl.search = '';
+    validateEndpointPolicy(policyUrl.toString(), allowedOrigins);
     const signal = AbortSignal.any([...(init?.signal ? [init.signal] : []), AbortSignal.timeout(Math.max(1000, Math.min(timeoutMs, 120_000)))]);
     try {
       signal.throwIfAborted();
@@ -74,28 +78,36 @@ export function guardedTransport(allowedOrigins: string[], timeoutMs: number,
             const error = new DomainError('PROVIDER_PROTOCOL_ERROR', 'Неподдерживаемое сжатие ответа API.', 502);
             reject(error); request.destroy(error); return;
           }
-          const stream = decoder ? response.pipe(decoder) : response;
-          const chunks: Buffer[] = []; let size = 0; let rawSize = 0;
-          const tooLarge = () => {
-            const error = new DomainError('PROVIDER_RESPONSE_TOO_LARGE', 'Ответ модели слишком большой.');
-            reject(error); request.destroy(error); decoder?.destroy(error);
+          const limit = () => {
+            let size = 0;
+            return new Transform({ transform(chunk: Buffer, _encoding, done) {
+              size += chunk.length;
+              done(size > 2 * 1024 * 1024 ? new DomainError('PROVIDER_RESPONSE_TOO_LARGE', 'Ответ модели слишком большой.', 502) : null, chunk);
+            } });
           };
-          response.on('data', chunk => { rawSize += chunk.length; if (rawSize > 2 * 1024 * 1024) tooLarge(); });
-          stream.on('data', (chunk: Buffer) => {
-            size += chunk.length;
-            if (size > 2 * 1024 * 1024) tooLarge();
-            else chunks.push(chunk);
-          });
-          response.on('error', reject);
-          if (decoder) decoder.on('error', reject);
-          stream.on('end', () => {
-            const headers = new Headers();
-            for (const [key, value] of Object.entries(response.headers)) if (value) headers.set(key, Array.isArray(value) ? value.join(', ') : value);
-            headers.delete('content-encoding'); headers.delete('content-length');
-            const status = response.statusCode ?? 502;
-            resolve(new Response([204, 205, 304].includes(status) ? null : Buffer.concat(chunks), { status, headers }));
-          });
+          const rawLimit = limit(), decodedLimit = limit();
+          const headers = new Headers();
+          for (const [key, value] of Object.entries(response.headers)) if (value) headers.set(key, Array.isArray(value) ? value.join(', ') : value);
+          headers.delete('content-encoding'); headers.delete('content-length');
+          const status = response.statusCode ?? 502;
+          // Pull from the iterator so cancelling a rejected HTTP response cannot race a queued enqueue.
+          if (decoder) pipeline(response, rawLimit, decoder, decodedLimit, () => {});
+          else pipeline(response, rawLimit, decodedLimit, () => {});
+          const iterator=decodedLimit[Symbol.asyncIterator]();let closed=false;
+          const body=new ReadableStream<Uint8Array>({
+            async pull(controller){if(closed)return;try{const item=await iterator.next();if(closed)return;if(item.done){closed=true;controller.close();}else controller.enqueue(new Uint8Array(item.value));}catch(e){if(!closed){closed=true;controller.error(e);}}},
+            async cancel(){closed=true;decodedLimit.destroy();request.destroy();try{await iterator.return?.();}catch{}},
+          },{highWaterMark:64*1024,size:chunk=>chunk.byteLength});
+          resolve(new Response([204, 205, 304].includes(status) ? null : body, { status, headers }));
         });
+        request.setTimeout(Math.min(30_000, Math.max(1000, timeoutMs)), () => request.destroy(new DomainError('PROVIDER_IDLE_TIMEOUT', 'Модель перестала передавать ответ.', 504)));
+        const firstByte = setTimeout(() => request.destroy(new DomainError('PROVIDER_FIRST_BYTE_TIMEOUT', 'Модель не начала ответ вовремя.', 504)), Math.min(30_000, Math.max(1000, timeoutMs)));
+        const connect = setTimeout(() => request.destroy(new DomainError('PROVIDER_CONNECT_TIMEOUT', 'Не удалось установить соединение с API.', 504)), Math.min(10_000, Math.max(1000, timeoutMs)));
+        connect.unref();
+        request.once('socket', socket => { if(socket.connecting)socket.once(url.protocol==='https:'?'secureConnect':'connect',()=>clearTimeout(connect));else clearTimeout(connect); });
+        firstByte.unref();
+        request.once('response', () => clearTimeout(firstByte));
+        request.once('close', () => {clearTimeout(firstByte);clearTimeout(connect);});
         request.on('error', reject);
         request.end(body);
       });

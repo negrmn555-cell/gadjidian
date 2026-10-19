@@ -73,6 +73,9 @@ const migrations = [
     CREATE TABLE push_deliveries(notification_id TEXT NOT NULL,subscription_id TEXT NOT NULL,state TEXT NOT NULL,error_code TEXT,PRIMARY KEY(notification_id,subscription_id));
     CREATE TABLE git_resolutions(operation_id TEXT PRIMARY KEY,path TEXT NOT NULL,expected_hash TEXT,result_hash TEXT,payload TEXT,state TEXT NOT NULL,created_at INTEGER NOT NULL);
   `},
+  {version:6,sql:`ALTER TABLE request_tombstones ADD COLUMN outcome TEXT; ALTER TABLE request_tombstones ADD COLUMN error_code TEXT;`},
+  {version:7,sql:`CREATE TABLE search_changes(sequence INTEGER PRIMARY KEY AUTOINCREMENT,path TEXT NOT NULL); CREATE TABLE search_checkpoint(id INTEGER PRIMARY KEY CHECK(id=1),revision INTEGER NOT NULL,versions TEXT NOT NULL,updated_at INTEGER NOT NULL);`},
+  {version:8,sql:`CREATE TABLE mcp_keys(id TEXT PRIMARY KEY,device_id INTEGER NOT NULL REFERENCES devices(id) ON DELETE CASCADE,token_hash TEXT UNIQUE NOT NULL,name TEXT NOT NULL,created_at INTEGER NOT NULL,expires_at INTEGER NOT NULL,last_seen INTEGER,revoked_at INTEGER); CREATE INDEX mcp_keys_device ON mcp_keys(device_id);`},
 ];
 
 export function migrate(db: DatabaseSync): void {

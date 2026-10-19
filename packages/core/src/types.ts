@@ -39,11 +39,23 @@ export interface SearchHit {
   snippet: string;
   mtime: number;
   sourceVersion?: import('./contracts.js').MemorySource;
+  headingPath?: string[];
+  chunkId?: string;
+  start?: number;
+  end?: number;
+  indexRevision?: number;
 }
 
-export type AgentEventType = 'status' | 'tool' | 'delta' | 'done' | 'error';
+export type AgentEventType = 'status' | 'tool' | 'delta' | 'done' | 'error' | 'tool.completed' | 'tool.failed' | 'tool.cancelled' | 'artifact.saved';
 
 export interface AgentEvent {
+  at?:number;
+  durationMs?:number;
+  summary?:string;
+  sources?:{path:string;heading?:string}[];
+  receipt?:import('./contracts.js').MutationReceipt;
+  callId?: string;
+  path?: string;
   type: AgentEventType;
   /** Human readable status or tool label. */
   text?: string;
@@ -59,6 +71,9 @@ export interface AgentAction {
 }
 
 export interface AgentResult {
+  tools?:import('./run-stream.js').ToolProgress[];
+  receipts?:import('./contracts.js').MutationReceipt[];
+  warnings?: string[];
   text: string;
   /** Notes that were read/searched while answering. */
   sources: string[];
@@ -66,6 +81,8 @@ export interface AgentResult {
   actions: AgentActionWithLabel[];
   usage?: { promptTokens: number; completionTokens: number };
   sourceVersions?: import('./contracts.js').MemorySource[];
+  outcome?: 'success' | 'failed' | 'cancelled' | 'partial';
+  error?: { code: string; retryable: boolean };
 }
 
 export interface AgentActionWithLabel extends AgentAction {
@@ -76,7 +93,7 @@ export interface ChatMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
   content: string | null;
   /** Multimodal parts are serialized instead of content for user messages only. */
-  parts?: ({ type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } })[];
+  parts?: ({ type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } } | {type:'file';file:{filename:string;file_data:string}})[];
   name?: string;
   tool_call_id?: string;
   tool_calls?: ToolCall[];

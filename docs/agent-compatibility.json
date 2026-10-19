@@ -1,0 +1,14 @@
+{
+  "node": "v24.19.0",
+  "react": "18.3.1",
+  "text": true,
+  "toolCalls": 1,
+  "streamAPI": true,
+  "transportStreaming": true,
+  "abort": true,
+  "error": true,
+  "requests": 6,
+  "assistantUIImport": true,
+  "provider": "local synthetic HTTP fixture",
+  "note": "Guarded transport exposes SSE before upstream completion. Runtime, replay and cancellation are additionally verified by agent-runtime.test.ts."
+}

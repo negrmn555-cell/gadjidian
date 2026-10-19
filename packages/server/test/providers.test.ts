@@ -113,6 +113,11 @@ test('ENV is imported once and deleting the imported profile does not resurrect 
   assert.equal((await ProviderRegistry.open(f.db, f.cfg)).list().items.length, 0);
 });
 
+test('a 32-byte binary key beginning with a JSON brace remains valid across reopen',async t=>{
+  const f=await fixture(t);f.cfg.providers.masterKey='';f.cfg.providers.keyFile=path.join(f.root,'brace-fixture.key');const raw=Buffer.alloc(32,42);raw[0]=123;await fs.writeFile(f.cfg.providers.keyFile,raw,{flag:'wx'});
+  const secrets=await ProviderSecrets.open(f.cfg,false),encrypted=secrets.encrypt('synthetic-secret','fixture-provider',1),reopened=await ProviderSecrets.open(f.cfg,false);assert.equal(reopened.decrypt(encrypted,'fixture-provider',1),'synthetic-secret');assert.deepEqual(await fs.readFile(f.cfg.providers.keyFile),raw);
+});
+
 test('missing or wrong master key fails closed without replacing existing encrypted credentials', async t => {
   const f = await fixture(t);
   f.cfg.providers.masterKey = ''; f.cfg.providers.keyFile = path.join(f.root, 'secrets', 'provider-master.key');
@@ -170,7 +175,8 @@ test('transport decodes gzip and limits the decoded size of compressed responses
   const large = await mockApi(t, (_body, res) => {
     res.setHeader('Content-Encoding', 'gzip'); res.end(gzipSync('x'.repeat(3 * 1024 * 1024)));
   });
-  await assert.rejects(guardedTransport([large.origin], 1000)(large.baseUrl, { method: 'POST', body: '{}' }), code('PROVIDER_RESPONSE_TOO_LARGE'));
+  const oversized=await guardedTransport([large.origin], 1000)(large.baseUrl, { method: 'POST', body: '{}' });
+  await assert.rejects(oversized.text(), code('PROVIDER_RESPONSE_TOO_LARGE'));
 });
 
 test('connection probe verifies tools with synthetic input, stores evidence for its version and never executes vault tools', async t => {
@@ -221,7 +227,7 @@ test('provider API enforces auth/limits, supports real model switching and prese
     const listed = await app.inject({ method: 'GET', url: '/api/providers', headers });
     assert.equal(listed.json().items.find((p: any) => p.slot === 'organizer').id, organizer.id);
     assert.doesNotMatch(listed.body, /fake-test-secret|apiKey/);
-    // Main replies and their summaries use the same immutable provider snapshot.
-    assert.equal(upstream.requests.length, 4);
+    // Short conversations keep their raw tail without extra summary calls.
+    assert.equal(upstream.requests.length, 2);
   } finally { await app.close(); }
 });

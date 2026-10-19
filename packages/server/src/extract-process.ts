@@ -67,7 +67,8 @@ async function extract(kind:string,bytes:Buffer):Promise<ExtractionReport>{
         const p=await pdf.getPage(i),tc=await p.getTextContent();
         const text=tc.items.map(item=>'str' in item?item.str+('hasEOL' in item&&item.hasEOL?'\n':' '):'').join('');
         const ops=await p.getOperatorList();const hasImage=ops.fnArray.some(op=>[OPS.paintImageXObject,OPS.paintInlineImageXObject,OPS.paintImageMaskXObject].includes(op));
-        if(text.trim() && !hasImage){page({number:i,method:'text',text,confidence:null,warnings:[]});}
+        const hasDiagram=ops.fnArray.some(op=>[OPS.constructPath,OPS.stroke,OPS.fill,OPS.eoFill].includes(op));const classification=text.trim()?(hasImage||hasDiagram?'visual':'text'):'scan';
+        if(text.trim() && !hasImage){page({number:i,method:'text',text,confidence:null,classification,warnings:hasDiagram?['Локальное извлечение не объясняет графику; интерпретация модели хранится отдельно.']:[]});if(hasDiagram)report.status='partial';}
         else{
           const original=p.getViewport({scale:2});const scale=original.width*original.height>MAX_PIXELS?2*Math.sqrt(MAX_PIXELS/(original.width*original.height)):2;
           const viewport=p.getViewport({scale});const factory=pdf.canvasFactory as {create:(w:number,h:number)=>{canvas:any;context:any};destroy:(cc:any)=>void},cc=factory.create(Math.ceil(viewport.width),Math.ceil(viewport.height));
@@ -75,7 +76,8 @@ async function extract(kind:string,bytes:Buffer):Promise<ExtractionReport>{
             const warnings=r.confidence<65?['Низкая уверенность OCR: проверьте страницу по оригиналу.']:[];
             if(!r.text.trim())warnings.push('На странице не распознан текст.');
             if(hasImage&&text.trim())warnings.push('Смешанная страница распознана целиком, чтобы учесть текст внутри изображений.');
-            page({number:i,method:'ocr',...r,warnings});if(!r.text.trim() && hasImage)report.status='partial';
+            if(hasImage)warnings.push('OCR извлекает текст; объяснение схемы моделью хранится отдельно.');
+            page({number:i,method:'ocr',...r,classification,warnings});if(hasImage||!r.text.trim())report.status='partial';
           }finally{factory.destroy(cc);}
         }p.cleanup();
       }catch{report.status='partial';page({number:i,method:'ocr',text:'',confidence:null,warnings:['Не удалось извлечь страницу; она доступна в оригинале.']});}

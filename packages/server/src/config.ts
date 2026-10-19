@@ -3,6 +3,9 @@ import { promises as fs } from 'node:fs';
 import type { VaultConfig, LlmConfig } from '@relay/core';
 
 export interface ServerConfig {
+  diagnostics?: {enabled:boolean;baseUrl:string;publicKey:string;secretKey:string;allowedOrigins:string[];retentionDays:number};
+  mcp?: {enabled:boolean};
+  agent?: { engine: "mastra"|"legacy"; maxSteps: number };
   host: string;
   port: number;
   /** Public origin, e.g. https://notes.example.com — used for CORS and PWA links. */
@@ -25,6 +28,8 @@ export interface ServerConfig {
     branch: string;
     authorName: string;
     authorEmail: string;
+    freshnessMs?: number;
+    timeoutMs?: number;
   };
   /** Optional extra system prompt / user scenarios file (JSON) in dataDir. */
   scenariosFile: string;
@@ -61,6 +66,9 @@ export function loadConfig(): ServerConfig {
   const dataDir = path.resolve(env('DATA_DIR', './data'));
   const vaultRoot = path.resolve(env('VAULT_PATH', path.join(dataDir, 'vault')));
   return {
+    diagnostics:{enabled:envBool('LANGFUSE_ENABLED',false),baseUrl:env('LANGFUSE_BASE_URL','https://cloud.langfuse.com'),publicKey:env('LANGFUSE_PUBLIC_KEY'),secretKey:env('LANGFUSE_SECRET_KEY'),allowedOrigins:list('LANGFUSE_ALLOWED_ORIGINS'),retentionDays:Math.max(1,Math.min(14,Math.trunc(envNum('LANGFUSE_RETENTION_DAYS',14))))},
+    mcp:{enabled:envBool('MCP_ENABLED',true)},
+    agent: {engine:env('AGENT_ENGINE','mastra')==='legacy'?'legacy':'mastra',maxSteps:Math.max(2,Math.min(6,Math.trunc(envNum('AGENT_MAX_STEPS',4))))},
     host: env('HOST', '0.0.0.0'),
     port: envNum('PORT', 8080),
     publicUrl: env('PUBLIC_URL', 'http://localhost:8080').replace(/\/+$/, ''),
@@ -100,6 +108,8 @@ export function loadConfig(): ServerConfig {
       branch: env('GIT_BRANCH', 'main'),
       authorName: env('GIT_AUTHOR_NAME', 'obsidian-relay'),
       authorEmail: env('GIT_AUTHOR_EMAIL', 'relay@localhost'),
+      freshnessMs: Math.max(0, envNum('SYNC_FRESHNESS_MS', 30_000)),
+      timeoutMs: Math.max(1000, Math.min(120_000, envNum('GIT_TIMEOUT_MS', 30_000))),
     },
     scenariosFile: env('SCENARIOS_FILE', path.join(dataDir, 'scenarios.json')),
     requireStandalone: envBool('REQUIRE_STANDALONE', true),

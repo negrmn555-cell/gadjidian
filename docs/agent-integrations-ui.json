@@ -1,0 +1,24 @@
+{
+  "viewports": [
+    {
+      "width": 320,
+      "overflow": false
+    },
+    {
+      "width": 390,
+      "overflow": false
+    },
+    {
+      "width": 1440,
+      "overflow": false
+    }
+  ],
+  "issuedThroughUI": true,
+  "realMcpSearchReadClient": true,
+  "hiddenWithoutBrowserPersistence": true,
+  "revokedThroughUI": true,
+  "revokedKeyRejected": true,
+  "metadataOnlyStatus": true,
+  "browserErrors": [],
+  "externalService": false
+}

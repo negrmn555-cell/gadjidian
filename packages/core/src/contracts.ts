@@ -1,10 +1,12 @@
+export const APP_VERSION = '0.2.0';
 /** Browser-safe contracts. Never import filesystem or server modules here. */
+export * from './preferences.js';
 export type Id = string;
 export type ChatMode = 'task' | 'note';
 export interface TaskDraftState { id: string; version: number; createdAt: number; task: Partial<TaskCreateInput>; tasks?:Partial<TaskCreateInput>[]; question: string; referenceInstant?:string }
 export interface ChatSession { id: string; title: string; mode: ChatMode; timezone: string; version: number; createdAt: number; updatedAt: number; expiresAt: number; messageCount: number; pendingTask: TaskDraftState | null; providerId?:string|null }
 export interface ChatPage { items: ChatSession[] }
-export interface Attachment { id: string; chatId: string; name: string; mediaType: string; size: number; createdAt: number; expiresAt: number; kind: 'text' | 'image'; textLength: number; processing?:'queued'|'running'|'ready'|'failed';processingError?:string|null; extraction?: {status:'complete'|'partial';pages:number;warnings:string[]} }
+export interface Attachment { id: string; chatId: string; name: string; mediaType: string; size: number; createdAt: number; expiresAt: number; kind: 'text' | 'image'; textLength: number; processing?:'queued'|'running'|'ready'|'failed';processingError?:string|null; extraction?: {status:'complete'|'partial';pages:number;warnings:string[];visualPages?:number[];analyzedPages?:number[]} }
 export interface ChatSendInput { chatId: string; requestId: string; expectedVersion: number; text: string; attachmentIds: string[]; draftId?: string; draftVersion?: number }
 export type NoteKind = 'quick' | 'idea' | 'person';
 export interface NoteCreateInput { title: string; body: string; kind: NoteKind; category: Category; tags: string[]; keywords: string[]; aliases: string[]; person: { phone: string; email: string; role: string } }
@@ -12,11 +14,12 @@ export interface NoteRecord extends NoteCreateInput { id: string | null; path: s
 export interface NotePage { items: Omit<NoteRecord, 'content' | 'body'>[]; invalidRecords: {path: string; error: string}[] }
 export interface NoteEditInput { fields?: NoteCreateInput; content?: string }
 export interface NoteWriteResult { note: NoteRecord; receipt: MutationReceipt }
-export interface ExtractionPage { number: number; method: 'text' | 'ocr'; text: string; confidence: number | null; warnings: string[] }
-export interface ExtractionReport { version: string; status: 'complete' | 'partial'; pages: ExtractionPage[]; warnings: string[]; images: {name: string; mediaType: string; base64: string}[] }
+export interface PageInterpretation {text:string;providerId:string;providerVersion:number;model:string;route:'native_pdf'|'page_images';settingsHash:string;warnings:string[]}
+export interface ExtractionPage { number: number; method: 'text' | 'ocr'; text: string; confidence: number | null; warnings: string[];classification?:'text'|'scan'|'visual';interpretation?:PageInterpretation }
+export interface ExtractionReport { version: string; fileHash?:string;settingsHash?:string; status: 'complete' | 'partial'; pages: ExtractionPage[]; warnings: string[]; images: {name: string; mediaType: string; base64: string}[] }
 export interface ImportResult { assetId: string; notePath: string; originalPath: string; manifestPath: string; status: 'complete' | 'partial'; warnings: string[]; receipt: MutationReceipt }
 export interface MemorySource { noteId: string | null; path: string; contentHash: string; state: 'current' | 'changed' | 'missing' | 'renamed'; checkedAt: number }
-export interface ChatMemory { summary: string; throughMessageId: number; coverage: {id: number; hash: string}[]; expiresAt: number; sources: MemorySource[] }
+export interface ChatMemory { summary: string; throughMessageId: number; coverage: {id: number; hash: string}[]; expiresAt: number; sources: MemorySource[]; refresh?:{state:'queued'|'idle'|'failed'} }
 export type Category = 'study' | 'work' | 'personal';
 export type Priority = 'highest' | 'high' | 'medium' | 'low';
 export type TaskStatus = 'todo' | 'in_progress' | 'done' | 'cancelled';
@@ -211,7 +214,7 @@ export function isTaskOverdue(task: Pick<Task, 'deadline' | 'status'>, now = new
 }
 
 export type ProviderSlot = 'chat' | 'organizer';
-export interface ProviderCapabilities { toolCalls: boolean; vision: boolean; structuredOutput: boolean }
+export interface ProviderCapabilities { toolCalls: boolean; vision: boolean; structuredOutput: boolean;nativePdf?:boolean;pdfMaxBytes?:number;pdfMaxPages?:number }
 export interface ProviderPublic {
   id: string; slot: ProviderSlot; name: string; adapter: 'openai_compatible'|'anthropic'|'gemini'; baseUrl: string;
   modelId: string; canonicalModelId: string | null; enabled: boolean; version: number;
@@ -247,6 +250,8 @@ export function validateProviderWrite(value: unknown, updating = false): Provide
     throw new DomainError('INVALID_ENDPOINT', 'Адрес API не должен содержать логин, пароль, query или fragment.');
   }
   const caps = objectInput(input.capabilities);
+  if(caps.nativePdf!==undefined&&typeof caps.nativePdf!=='boolean')throw new DomainError('VALIDATION_ERROR','Проверьте поддержку PDF.');
+  for(const [key,max] of [['pdfMaxBytes',5*1024*1024],['pdfMaxPages',100]] as const)if(caps[key]!==undefined&&(!Number.isSafeInteger(caps[key])||Number(caps[key])<1||Number(caps[key])>max))throw new DomainError('VALIDATION_ERROR','Некорректный лимит PDF.');
   if (typeof input.enabled !== 'boolean' || ['toolCalls', 'vision', 'structuredOutput'].some(k => typeof caps[k] !== 'boolean')) {
     throw new DomainError('VALIDATION_ERROR', 'Проверьте включение профиля и возможности модели.');
   }
@@ -261,7 +266,7 @@ export function validateProviderWrite(value: unknown, updating = false): Provide
   }
   const canonical = input.canonicalModelId == null || input.canonicalModelId === '' ? null : text(input.canonicalModelId, 'canonicalModelId', 200, true).toLowerCase();
   return { name, modelId, baseUrl: endpoint.href.replace(/\/+$/, ''), adapter, canonicalModelId: canonical,
-    enabled: input.enabled, capabilities: { toolCalls: caps.toolCalls as boolean, vision: caps.vision as boolean, structuredOutput: caps.structuredOutput as boolean },
+    enabled: input.enabled, capabilities: { toolCalls: caps.toolCalls as boolean, vision: caps.vision as boolean, structuredOutput: caps.structuredOutput as boolean,...(caps.nativePdf!==undefined?{nativePdf:caps.nativePdf as boolean}:{}),...(caps.pdfMaxBytes!==undefined?{pdfMaxBytes:Number(caps.pdfMaxBytes)}:{}),...(caps.pdfMaxPages!==undefined?{pdfMaxPages:Number(caps.pdfMaxPages)}:{}) },
     secretUpdate, expectedVersion: updating ? Number(input.expectedVersion) : undefined };
 }
 
@@ -271,7 +276,7 @@ export interface AutomationSettings {
   digest:{enabled:boolean;timezone:string;weekday:number;localTime:string;maxItems:number;includeOverdue:boolean};
 }
 export type JobState='queued'|'running'|'succeeded'|'failed'|'cancelled'|'unknown';
-export interface ScheduledJob {id:string;kind:'organize'|'weekly_digest'|'extract';dedupeKey:string;scheduledFor:number;settingsVersion:number;state:JobState;attempt:number;leaseUntil:number|null;fencingToken:number;lastError:string|null;result:unknown}
+export interface ScheduledJob {id:string;kind:'organize'|'weekly_digest'|'extract'|'summarize'|'document';dedupeKey:string;scheduledFor:number;settingsVersion:number;state:JobState;attempt:number;leaseUntil:number|null;fencingToken:number;lastError:string|null;result:unknown}
 export interface OrganizationPatch {path:string;baseHash:string;targetPath?:string;addTags:string[];keywords?:string[];relatedPaths:string[];rationale:string}
 export interface OrganizationPlan {id:string;inputHead:string|null;policyVersion:number;settingsVersion:number;provider?:{id:string;version:number};patches:OrganizationPatch[];deferredPaths:string[];affectedPaths:string[];inputHashes:Record<string,string>;createdAt:number}
 export interface OrganizationPreview {plan:OrganizationPlan;files:{path:string;before:string;after:string;moveFrom?:string}[];remaining:number;warnings:string[]}
@@ -293,3 +298,4 @@ export function validateAutomationSettings(value:unknown,current:AutomationSetti
   if(digest.enabled&&organizer.enabled&&organizer.weekdays.includes(digest.weekday)&&(digest.timezone!==organizer.timezone||digest.localTime>=organizer.localTime))throw new DomainError('DIGEST_ORDER','Уведомление должно приходить перед сортировкой в том же часовом поясе.');
   return {version:current.version+1,changedAt:now,organizer,digest};
 }
+export { emptyRunStream, reduceRunEvent, finishTools, type RunStreamState, type ToolProgress } from './run-stream.js';

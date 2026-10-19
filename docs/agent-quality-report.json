@@ -1,0 +1,95 @@
+{
+  "runner": "Promptfoo 0.124.1",
+  "promptVersion": "relay-v1",
+  "agentModel": "synthetic-model-v1",
+  "externalLlm": false,
+  "paidGrading": false,
+  "suites": [
+    {
+      "name": "retrieval",
+      "successes": 80,
+      "failures": 0,
+      "errors": 0,
+      "durationMs": 717
+    },
+    {
+      "name": "agent",
+      "successes": 14,
+      "failures": 0,
+      "errors": 0,
+      "durationMs": 2879,
+      "cases": [
+        {
+          "scenario": "search",
+          "runtime": "mastra",
+          "passed": true
+        },
+        {
+          "scenario": "search",
+          "runtime": "legacy",
+          "passed": true
+        },
+        {
+          "scenario": "private-source",
+          "runtime": "mastra",
+          "passed": true
+        },
+        {
+          "scenario": "private-source",
+          "runtime": "legacy",
+          "passed": true
+        },
+        {
+          "scenario": "partial-write",
+          "runtime": "mastra",
+          "passed": true
+        },
+        {
+          "scenario": "partial-write",
+          "runtime": "legacy",
+          "passed": true
+        },
+        {
+          "scenario": "guard-preferences",
+          "runtime": "mastra",
+          "passed": true
+        },
+        {
+          "scenario": "guard-preferences",
+          "runtime": "legacy",
+          "passed": true
+        },
+        {
+          "scenario": "remember",
+          "runtime": "mastra",
+          "passed": true
+        },
+        {
+          "scenario": "remember",
+          "runtime": "legacy",
+          "passed": true
+        },
+        {
+          "scenario": "deadline-hallucination",
+          "runtime": "mastra",
+          "passed": true
+        },
+        {
+          "scenario": "deadline-hallucination",
+          "runtime": "legacy",
+          "passed": true
+        },
+        {
+          "scenario": "deadline-explicit",
+          "runtime": "mastra",
+          "passed": true
+        },
+        {
+          "scenario": "deadline-explicit",
+          "runtime": "legacy",
+          "passed": true
+        }
+      ]
+    }
+  ]
+}

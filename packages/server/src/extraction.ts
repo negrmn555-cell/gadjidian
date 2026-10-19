@@ -5,7 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { DomainError, type ExtractionReport } from '@relay/core';
 
-export const EXTRACTOR_VERSION='relay-local-ocr-1';
+export const EXTRACTOR_VERSION='relay-local-ocr-2';
 /** Own process: killing it also terminates its OCR threads and native allocations. */
 export async function extractFull(kind:string,bytes:Buffer,signal?:AbortSignal):Promise<ExtractionReport> {
   if(signal?.aborted)throw new DomainError('EXTRACTION_EXPIRED','Распознавание отменено или срок хранения истёк.');

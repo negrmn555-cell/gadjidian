@@ -1,0 +1,16 @@
+{
+  "label": "indexed-10000",
+  "node": "v24.19.0",
+  "platform": "win32",
+  "count": 10000,
+  "cases": 80,
+  "model": null,
+  "network": false,
+  "coldMs": 26976.7813,
+  "p50Ms": 1.0726999999969848,
+  "p95Ms": 183.62629999999626,
+  "warmFileReads": 0,
+  "recallAt5": 1,
+  "rssBytes": 448319488,
+  "note": "Synthetic retrieval benchmark; does not measure LLM response time or production capacity."
+}

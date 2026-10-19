@@ -1,0 +1,16 @@
+{
+  "label": "baseline",
+  "node": "v24.19.0",
+  "platform": "win32",
+  "count": 1000,
+  "cases": 80,
+  "model": null,
+  "network": false,
+  "coldMs": 1761.5501,
+  "p50Ms": 1683.4327000000048,
+  "p95Ms": 9705.363900000011,
+  "warmFileReads": 80000,
+  "recallAt5": 1,
+  "rssBytes": 131670016,
+  "note": "Synthetic retrieval benchmark; does not measure LLM response time or production capacity."
+}

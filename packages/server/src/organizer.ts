@@ -1,3 +1,4 @@
+import { isPreferencesPath } from '@relay/core';
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { Document, parseDocument } from 'yaml';
@@ -14,7 +15,7 @@ const list=(v:unknown,max=32):string[]=>{if(!Array.isArray(v)||v.length>max||v.s
 export class OrganizerService {
   constructor(private vault:Vault,private db:Db,private index:NoteIndex,private providers:ProviderRegistry,private sync:GitSync,private mutations:VaultMutationService,private settings:AutomationSettingsService,private now=()=>Date.now()){}
   checkpoint():{head:string|null;policyVersion:number;completedAt:number|null} {return JSON.parse(this.db.getSetting('organizer.checkpoint')??'{"head":null,"policyVersion":0,"completedAt":null}');}
-  private allowed(n:IndexedNote):boolean {return !this.settings.get().organizer.excludedFolders.some(p=>n.path.toLowerCase()===p.toLowerCase()||n.path.toLowerCase().startsWith(p.toLowerCase()+'/'));}
+  private allowed(n:IndexedNote):boolean {if(isPreferencesPath(n.path))return false;return !this.settings.get().organizer.excludedFolders.some(p=>n.path.toLowerCase()===p.toLowerCase()||n.path.toLowerCase().startsWith(p.toLowerCase()+'/'));}
   async preview(runId='plan_'+randomUUID(),signal?:AbortSignal):Promise<OrganizationPreview> {
     if(!/^[A-Za-z0-9_-]{8,128}$/.test(runId))throw new DomainError('INVALID_RUN','Некорректный ID плана.');
     const existing=this.db.sql.prepare('SELECT plan_json FROM organizer_runs WHERE id=?').get(runId) as {plan_json:string}|undefined;if(existing)return JSON.parse(existing.plan_json);

@@ -1,0 +1,21 @@
+{
+  "node": "v24.19.0",
+  "platform": "win32",
+  "install": "npm ci --omit=dev --ignore-scripts --offline",
+  "isolatedDirectory": true,
+  "health": true,
+  "authenticatedMastraRequest": true,
+  "streamingAdapter": true,
+  "durableSnapshot": true,
+  "idempotentReplay": true,
+  "directCapture": true,
+  "preferencesCreateReadDelete": true,
+  "productionPdfExtraction": true,
+  "productionPdfSubset": true,
+  "productionPdfRendering": true,
+  "readOnlyMcpClient": true,
+  "diagnosticsStatus": true,
+  "providerCalls": 1,
+  "externalLlm": false,
+  "dockerBuild": false
+}

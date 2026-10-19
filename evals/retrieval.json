@@ -1,0 +1,893 @@
+{
+  "description": "80 synthetic Russian retrieval cases against the actual SearchService",
+  "prompts": [
+    "{{query}}"
+  ],
+  "providers": [
+    {
+      "id": "file://retrieval-provider.mjs"
+    }
+  ],
+  "tests": [
+    {
+      "vars": {
+        "query": "Инфляция"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Инфляция.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "инфляции"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Инфляция.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "рост цен"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Инфляция.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "Учеба/Инфляция.md"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Инфляция.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "Безработица"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Безработица.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "безработицы"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Безработица.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "рынок труда"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Безработица.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "Учеба/Безработица.md"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Безработица.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "Инвестиции"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Инвестиции.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "инвестиций"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Инвестиции.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "капитальные вложения"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Инвестиции.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "Учеба/Инвестиции.md"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Инвестиции.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "Налоги"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Налоги.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "налогами"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Налоги.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "фискальные платежи"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Налоги.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "Учеба/Налоги.md"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Налоги.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "Кредиты"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Кредиты.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "кредитами"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Кредиты.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "заемные средства"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Кредиты.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "Учеба/Кредиты.md"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Кредиты.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "Экспорт"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Экспорт.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "экспорта"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Экспорт.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "внешние продажи"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Экспорт.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "Учеба/Экспорт.md"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Экспорт.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "Импорт"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Импорт.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "импорта"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Импорт.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "внешние закупки"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Импорт.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "Учеба/Импорт.md"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Импорт.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "Сбережения"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Сбережения.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "сбережений"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Сбережения.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "накопленные деньги"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Сбережения.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "Учеба/Сбережения.md"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Сбережения.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "Производство"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Производство.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "производства"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Производство.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "выпуск продукции"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Производство.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "Учеба/Производство.md"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Производство.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "Потребление"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Потребление.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "потребления"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Потребление.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "расходы домохозяйств"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Потребление.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "Учеба/Потребление.md"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Потребление.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "Бюджет"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Бюджет.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "бюджета"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Бюджет.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "государственная смета"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Бюджет.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "Учеба/Бюджет.md"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Бюджет.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "Конкуренция"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Конкуренция.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "конкуренции"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Конкуренция.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "соперничество фирм"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Конкуренция.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "Учеба/Конкуренция.md"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Конкуренция.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "Монополия"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Монополия.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "монополии"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Монополия.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "единственный продавец"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Монополия.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "Учеба/Монополия.md"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Монополия.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "Амортизация"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Амортизация.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "амортизации"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Амортизация.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "износ оборудования"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Амортизация.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "Учеба/Амортизация.md"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Амортизация.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "Дивиденды"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Дивиденды.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "дивидендов"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Дивиденды.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "выплаты акционерам"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Дивиденды.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "Учеба/Дивиденды.md"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Дивиденды.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "Ликвидность"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Ликвидность.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "ликвидности"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Ликвидность.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "продажа активов"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Ликвидность.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "Учеба/Ликвидность.md"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Ликвидность.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "Облигации"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Облигации.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "облигаций"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Облигации.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "долговые бумаги"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Облигации.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "Учеба/Облигации.md"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Облигации.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "Акции"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Акции.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "акциями"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Акции.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "доли компании"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Акции.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "Учеба/Акции.md"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Акции.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "Субсидии"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Субсидии.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "субсидиями"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Субсидии.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "бюджетная поддержка"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Субсидии.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "Учеба/Субсидии.md"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Субсидии.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "Дефляция"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Дефляция.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "дефляции"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Дефляция.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "снижение цен"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Дефляция.md"
+        }
+      ]
+    },
+    {
+      "vars": {
+        "query": "Учеба/Дефляция.md"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "Учеба/Дефляция.md"
+        }
+      ]
+    }
+  ]
+}

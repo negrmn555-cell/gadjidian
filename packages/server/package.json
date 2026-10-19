@@ -1,6 +1,6 @@
 {
   "name": "@relay/server",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "main": "./dist/index.js",
@@ -13,19 +13,24 @@
     "cli": "node --env-file-if-exists=../../.env dist/cli.js"
   },
   "dependencies": {
+    "@ai-sdk/provider-v5": "npm:@ai-sdk/provider@2.0.3",
     "@fastify/cors": "^10.0.1",
     "@fastify/static": "^10.1.5",
     "@fastify/websocket": "^11.0.1",
+    "@mastra/core": "1.78.0",
+    "@modelcontextprotocol/sdk": "1.32.1",
     "@napi-rs/canvas": "^1.0.10",
-    "@relay/core": "0.1.0",
+    "@relay/core": "0.2.0",
     "@tesseract.js-data/eng": "^1.0.0",
     "@tesseract.js-data/rus": "^1.0.0",
     "fastify": "^5.12.5",
     "fflate": "^0.8.3",
+    "pdf-lib": "1.17.1",
     "pdfjs-dist": "^6.3.289",
     "tesseract.js": "^7.0.0",
     "web-push": "^3.6.7",
-    "yaml": "^2.9.1"
+    "yaml": "^2.9.1",
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

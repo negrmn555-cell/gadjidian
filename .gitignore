@@ -6,3 +6,6 @@ dist-test/
 data/
 *.log
 .DS_Store
+
+# Private operational reports can contain host/account details.
+docs/vps-deployment-*.ru.md

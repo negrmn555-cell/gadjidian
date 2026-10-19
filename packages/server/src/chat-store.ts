@@ -2,15 +2,21 @@ import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
 import { DomainError, validateTimezone, type ChatSession, type ChatMode, type TaskDraftState, type Attachment, type ExtractionReport, type ChatMemory } from '@relay/core';
 import type { StoredMessage } from './db.js';
+import { RunEvents } from './run-events.js';
 
 export const CHAT_RETENTION_MS = 14 * 86_400_000;
 export interface StoredAttachment extends Attachment { bytes: Buffer; text: string; report:ExtractionReport|null }
+export interface SummaryRequest { device: number; chat: string; generation: number; target: number; providerId: string | null; providerVersion: number | null; force: boolean; expiresAt: number; revision:number }
 /** All conversation state and uploaded bytes live in this short-lived database. */
 export class ChatStore {
   private readonly db: DatabaseSync;
+  readonly events: RunEvents;
   constructor(file: string, private readonly now = () => Date.now()) {
     this.db = new DatabaseSync(file);
-    this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA secure_delete=ON;
+    this.events = new RunEvents(this.db, this.now);
+    this.db.exec('CREATE TABLE IF NOT EXISTS extraction_cache(device_id INTEGER NOT NULL,chat TEXT NOT NULL,cache_key TEXT NOT NULL,value_json TEXT NOT NULL,expires_at INTEGER NOT NULL,PRIMARY KEY(device_id,chat,cache_key));CREATE TABLE IF NOT EXISTS document_runs(device_id INTEGER NOT NULL,chat TEXT NOT NULL,id TEXT NOT NULL,value_json TEXT NOT NULL,expires_at INTEGER NOT NULL,PRIMARY KEY(device_id,chat,id))');
+    this.db.exec('CREATE TABLE IF NOT EXISTS preference_conflicts(device_id INTEGER NOT NULL,operation_id TEXT NOT NULL,value_json TEXT NOT NULL,expires_at INTEGER NOT NULL,PRIMARY KEY(device_id,operation_id))');
+    this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA secure_delete=ON;
       CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, device_id INTEGER NOT NULL, chat TEXT NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL, meta TEXT, created_at INTEGER NOT NULL);
       CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(device_id,chat,id);
       CREATE INDEX IF NOT EXISTS idx_messages_expiry ON messages(created_at);
@@ -22,6 +28,10 @@ export class ChatStore {
     if(!(this.db.prepare('PRAGMA table_info(attachments)').all() as {name:string}[]).some(c=>c.name==='processing'))this.db.exec("ALTER TABLE attachments ADD COLUMN processing TEXT NOT NULL DEFAULT 'ready'; ALTER TABLE attachments ADD COLUMN processing_error TEXT");
     this.db.exec('PRAGMA user_version=3;');
     if(!(this.db.prepare('PRAGMA table_info(chats)').all() as {name:string}[]).some(c=>c.name==='provider_id'))this.db.exec('ALTER TABLE chats ADD COLUMN provider_id TEXT');
+    if(!(this.db.prepare('PRAGMA table_info(chats)').all() as {name:string}[]).some(c=>c.name==='memory_generation'))this.db.exec('ALTER TABLE chats ADD COLUMN memory_generation INTEGER NOT NULL DEFAULT 0');
+    this.db.exec('CREATE TABLE IF NOT EXISTS chat_memory_versions(device_id INTEGER NOT NULL,chat TEXT NOT NULL,revision INTEGER NOT NULL,PRIMARY KEY(device_id,chat))');
+    this.db.exec(`CREATE TABLE IF NOT EXISTS summary_requests(device_id INTEGER NOT NULL,chat TEXT NOT NULL,generation INTEGER NOT NULL,target INTEGER NOT NULL,provider_id TEXT,provider_version INTEGER,force INTEGER NOT NULL DEFAULT 0,expires_at INTEGER NOT NULL,PRIMARY KEY(device_id,chat)); PRAGMA user_version=4;`);
+    if(!(this.db.prepare('PRAGMA table_info(summary_requests)').all() as {name:string}[]).some(c=>c.name==='request_version'))this.db.exec('ALTER TABLE summary_requests ADD COLUMN request_version INTEGER NOT NULL DEFAULT 1');
     this.prune(); this.importSessions();
   }
   private importSessions(): void {
@@ -76,7 +86,11 @@ export class ChatStore {
     }
     this.db.prepare('INSERT INTO chat_runs VALUES(?,?,?,?,NULL,?)').run(device,id,request,hash,this.now()); return null;
   }
-  finishRun(device:number,id:string,request:string,result:unknown): void { this.db.prepare('UPDATE chat_runs SET result=? WHERE device_id=? AND chat=? AND request_id=?').run(JSON.stringify(result),device,id,request); }
+  finishRun(device:number,id:string,request:string,result:unknown,summary?:{providerId:string|null;providerVersion:number|null}): void {
+    this.db.exec('BEGIN IMMEDIATE');
+    try { this.db.prepare('UPDATE chat_runs SET result=? WHERE device_id=? AND chat=? AND request_id=?').run(JSON.stringify(result),device,id,request); if(summary)this.requestSummary(device,id,summary.providerId,summary.providerVersion); this.db.exec('COMMIT'); }
+    catch(e){this.db.exec('ROLLBACK');throw e;}
+  }
   run(device:number,chat:string,request:string):{result:unknown|null;hash:string}|null {const r=this.db.prepare('SELECT input_hash,result FROM chat_runs WHERE device_id=? AND chat=? AND request_id=? AND created_at>?').get(device,chat,request,this.now()-CHAT_RETENTION_MS) as {input_hash:string;result:string|null}|undefined;return r?{result:r.result?JSON.parse(r.result):null,hash:r.input_hash}:null;}
   importLegacy(rows: StoredMessage[]): void {
     this.db.exec('BEGIN IMMEDIATE');
@@ -109,7 +123,7 @@ export class ChatStore {
     const r=this.db.prepare('SELECT * FROM attachments WHERE id=? AND device_id=? AND chat=? AND expires_at>?').get(id,device,chat,this.now()) as Record<string,unknown>|undefined;
     if(!r) throw new DomainError('ATTACHMENT_NOT_FOUND','Файл недоступен в этом чате или срок хранения истёк.',404);
     const report=r.report_json?JSON.parse(String(r.report_json)) as ExtractionReport:null;
-    return {id:String(r.id),chatId:chat,name:String(r.name),mediaType:String(r.media_type),kind:r.kind as 'text'|'image',bytes:Buffer.from(r.bytes as Uint8Array),text:String(r.text),textLength:String(r.text).length,size:(r.bytes as Uint8Array).length,createdAt:Number(r.created_at),expiresAt:Number(r.expires_at),report,processing:r.processing as Attachment['processing'],processingError:r.processing_error as string|null,...(report?{extraction:{status:report.status,pages:report.pages.length,warnings:[...report.warnings,...report.pages.flatMap(p=>p.warnings)]}}:{})};
+    return {id:String(r.id),chatId:chat,name:String(r.name),mediaType:String(r.media_type),kind:r.kind as 'text'|'image',bytes:Buffer.from(r.bytes as Uint8Array),text:String(r.text),textLength:String(r.text).length,size:(r.bytes as Uint8Array).length,createdAt:Number(r.created_at),expiresAt:Number(r.expires_at),report,processing:r.processing as Attachment['processing'],processingError:r.processing_error as string|null,...(report?{extraction:{status:report.status,pages:report.pages.length,visualPages:report.pages.filter(p=>p.classification==='visual'||p.classification==='scan').map(p=>p.number),analyzedPages:report.pages.filter(p=>p.interpretation).map(p=>p.number),warnings:[...report.warnings,...report.pages.flatMap(p=>p.warnings)]}}:{})};
   }
   extractionState(device:number,chat:string,id:string,state:NonNullable<Attachment['processing']>,error:string|null=null):void{this.attachment(device,chat,id);this.db.prepare('UPDATE attachments SET processing=?,processing_error=? WHERE id=? AND device_id=? AND chat=?').run(state,error,id,device,chat);}
   extracted(device:number,chat:string,id:string,text:string,report:ExtractionReport):void {
@@ -119,27 +133,55 @@ export class ChatStore {
   }
   clear(device:number,chat:string):void {
     this.db.exec('BEGIN IMMEDIATE');
-    try { for(const table of ['messages','attachments','chat_runs','chat_memory']) this.db.prepare(`DELETE FROM ${table} WHERE device_id=? AND chat=?`).run(device,chat); this.db.prepare("UPDATE chats SET pending=NULL,title='Новый чат',version=version+1 WHERE device_id=? AND id=?").run(device,chat); this.db.exec('COMMIT'); }
+    try { for(const table of ['messages','attachments','chat_runs','chat_memory','chat_memory_versions','summary_requests','run_snapshots','run_events','extraction_cache','document_runs']) this.db.prepare(`DELETE FROM ${table} WHERE device_id=? AND chat=?`).run(device,chat); this.db.prepare("UPDATE chats SET pending=NULL,title='Новый чат',version=version+1,memory_generation=memory_generation+1 WHERE device_id=? AND id=?").run(device,chat); this.db.exec('COMMIT'); }
     catch(e){this.db.exec('ROLLBACK');throw e;} this.db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
   }
   prune():void {
+    this.db.prepare('DELETE FROM preference_conflicts WHERE expires_at<=?').run(this.now());
+    this.events.prune();
+    for(const table of ['extraction_cache','document_runs'])this.db.prepare('DELETE FROM '+table+' WHERE expires_at<=?').run(this.now());
     const cutoff=this.now()-CHAT_RETENTION_MS;
     this.db.prepare('DELETE FROM messages WHERE created_at<=? OR EXISTS(SELECT 1 FROM chats c WHERE c.device_id=messages.device_id AND c.id=messages.chat AND c.expires_at<=?)').run(cutoff,this.now());
     this.db.prepare('DELETE FROM attachments WHERE expires_at<=?').run(this.now());
     this.db.prepare('DELETE FROM chat_runs WHERE created_at<=? OR EXISTS(SELECT 1 FROM chats c WHERE c.device_id=chat_runs.device_id AND c.id=chat_runs.chat AND c.expires_at<=?)').run(cutoff,this.now());
     this.db.prepare('DELETE FROM chats WHERE expires_at<=?').run(this.now());
     this.db.prepare('DELETE FROM chat_memory WHERE expires_at<=?').run(this.now());
+    this.db.exec('DELETE FROM chat_memory_versions WHERE NOT EXISTS(SELECT 1 FROM chat_memory m WHERE m.device_id=chat_memory_versions.device_id AND m.chat=chat_memory_versions.chat)');
+    this.db.prepare('DELETE FROM summary_requests WHERE expires_at<=? OR NOT EXISTS(SELECT 1 FROM chats c WHERE c.device_id=summary_requests.device_id AND c.id=summary_requests.chat AND c.memory_generation=summary_requests.generation)').run(this.now());
     this.db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
   }
-  close():void{this.db.close();}
+  close():void{this.events.close();this.db.close();}
+  cachedExtraction(device:number,chat:string,key:string):unknown|null{const row=this.db.prepare('SELECT value_json FROM extraction_cache WHERE device_id=? AND chat=? AND cache_key=? AND expires_at>?').get(device,chat,key,this.now()) as {value_json:string}|undefined;return row?JSON.parse(row.value_json):null;}
+  cacheExtraction(device:number,chat:string,key:string,value:unknown,expiresAt:number):void{this.get(device,chat);const json=JSON.stringify(value);if(Buffer.byteLength(json)>2*1024*1024)return;this.db.prepare('DELETE FROM extraction_cache WHERE expires_at<=?').run(this.now());const total=this.db.prepare('SELECT COALESCE(SUM(length(CAST(value_json AS BLOB))),0) AS size FROM extraction_cache WHERE device_id=?').get(device) as {size:number};if(total.size+Buffer.byteLength(json)>10*1024*1024)return;this.db.prepare('INSERT OR REPLACE INTO extraction_cache VALUES(?,?,?,?,?)').run(device,chat,key,json,Math.min(expiresAt,this.get(device,chat).expiresAt));}
+  saveDocumentRun(device:number,chat:string,id:string,value:unknown,expiresAt:number):void{this.get(device,chat);this.db.prepare('INSERT OR REPLACE INTO document_runs VALUES(?,?,?,?,?)').run(device,chat,id,JSON.stringify(value),Math.min(expiresAt,this.get(device,chat).expiresAt));}
+  documentRun(device:number,chat:string,id:string):unknown|null{this.get(device,chat);const row=this.db.prepare('SELECT value_json FROM document_runs WHERE device_id=? AND chat=? AND id=? AND expires_at>?').get(device,chat,id,this.now()) as {value_json:string}|undefined;return row?JSON.parse(row.value_json):null;}
+  documentRequests():{device:number;chat:string;id:string;value:unknown}[]{return (this.db.prepare('SELECT device_id,chat,id,value_json FROM document_runs WHERE expires_at>?').all(this.now()) as {device_id:number;chat:string;id:string;value_json:string}[]).map(r=>({device:r.device_id,chat:r.chat,id:r.id,value:JSON.parse(r.value_json)}));}
+  savePreferenceConflict(device:number,operationId:string,value:unknown):void { this.db.prepare('INSERT OR REPLACE INTO preference_conflicts VALUES(?,?,?,?)').run(device,operationId,JSON.stringify(value),this.now()+CHAT_RETENTION_MS); }
+  preferenceConflicts(device:number):{operationId:string;draft:unknown;expiresAt:number}[]{return (this.db.prepare('SELECT operation_id,value_json,expires_at FROM preference_conflicts WHERE device_id=? AND expires_at>? ORDER BY expires_at DESC LIMIT 10').all(device,this.now()) as {operation_id:string;value_json:string;expires_at:number}[]).map(r=>({operationId:r.operation_id,draft:JSON.parse(r.value_json),expiresAt:r.expires_at}));}
+  removePreferenceConflict(device:number,id:string):void{this.db.prepare('DELETE FROM preference_conflicts WHERE device_id=? AND operation_id=?').run(device,id);}
   memory(device:number,chat:string):ChatMemory {
     const session=this.get(device,chat),r=this.db.prepare('SELECT value_json FROM chat_memory WHERE device_id=? AND chat=? AND expires_at>?').get(device,chat,this.now()) as {value_json:string}|undefined;
     return r?JSON.parse(r.value_json):{summary:'',throughMessageId:0,coverage:[],sources:[],expiresAt:session.expiresAt};
   }
-  saveMemory(device:number,chat:string,memory:ChatMemory):void {
+  memoryGeneration(device:number,chat:string):number { this.get(device,chat);return (this.db.prepare('SELECT memory_generation AS n FROM chats WHERE device_id=? AND id=?').get(device,chat) as {n:number}).n; }
+  memoryRevision(device:number,chat:string):number { return (this.db.prepare('SELECT revision AS n FROM chat_memory_versions WHERE device_id=? AND chat=?').get(device,chat) as {n:number}|undefined)?.n??0; }
+  saveMemory(device:number,chat:string,memory:ChatMemory,expectedRevision?:number):boolean {
     const c=this.get(device,chat);if(memory.expiresAt>c.expiresAt || memory.expiresAt<=this.now())throw new DomainError('MEMORY_EXPIRED','Срок памяти истёк.');
-    this.db.prepare('INSERT INTO chat_memory VALUES(?,?,?,?) ON CONFLICT(device_id,chat) DO UPDATE SET value_json=excluded.value_json,expires_at=excluded.expires_at').run(device,chat,JSON.stringify(memory),memory.expiresAt);
+    this.db.exec('BEGIN IMMEDIATE');
+    try{
+      if(expectedRevision!==undefined&&this.memoryRevision(device,chat)!==expectedRevision){this.db.exec('COMMIT');return false;}
+      this.db.prepare('INSERT INTO chat_memory(device_id,chat,value_json,expires_at) VALUES(?,?,?,?) ON CONFLICT(device_id,chat) DO UPDATE SET value_json=excluded.value_json,expires_at=excluded.expires_at').run(device,chat,JSON.stringify(memory),memory.expiresAt);
+      this.db.prepare('INSERT INTO chat_memory_versions VALUES(?,?,1) ON CONFLICT(device_id,chat) DO UPDATE SET revision=chat_memory_versions.revision+1').run(device,chat);
+      this.db.exec('COMMIT');return true;
+    }catch(e){this.db.exec('ROLLBACK');throw e;}
   }
+  requestSummary(device:number,chat:string,providerId:string|null=null,providerVersion:number|null=null,force=false):SummaryRequest {
+    const c=this.get(device,chat),generation=this.memoryGeneration(device,chat),target=this.list(device,chat,1).at(-1)?.id??0;
+    this.db.prepare(`INSERT INTO summary_requests(device_id,chat,generation,target,provider_id,provider_version,force,expires_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(device_id,chat) DO UPDATE SET generation=excluded.generation,target=excluded.target,provider_id=excluded.provider_id,provider_version=excluded.provider_version,force=MAX(summary_requests.force,excluded.force),expires_at=excluded.expires_at,request_version=summary_requests.request_version+1`).run(device,chat,generation,target,providerId,providerVersion,force?1:0,c.expiresAt);
+    return this.summaryRequests().find(r=>r.device===device&&r.chat===chat)!;
+  }
+  summaryRequests():SummaryRequest[] {return (this.db.prepare('SELECT r.* FROM summary_requests r JOIN chats c ON c.device_id=r.device_id AND c.id=r.chat AND c.memory_generation=r.generation WHERE r.expires_at>?').all(this.now()) as {device_id:number;chat:string;generation:number;target:number;provider_id:string|null;provider_version:number|null;force:number;expires_at:number;request_version:number}[]).map(r=>({device:r.device_id,chat:r.chat,generation:r.generation,target:r.target,providerId:r.provider_id,providerVersion:r.provider_version,force:!!r.force,expiresAt:r.expires_at,revision:r.request_version}));}
+  completeSummary(request:SummaryRequest):void {this.db.prepare('DELETE FROM summary_requests WHERE device_id=? AND chat=? AND generation=? AND target=? AND request_version=?').run(request.device,request.chat,request.generation,request.target,request.revision);}
   since(device:number,chat:string,afterId:number,limit=200):StoredMessage[] {
     this.get(device,chat);return (this.db.prepare('SELECT * FROM messages WHERE device_id=? AND chat=? AND id>? AND created_at>? ORDER BY id LIMIT ?').all(device,chat,afterId,this.now()-CHAT_RETENTION_MS,limit) as Record<string,unknown>[]).map(r=>({id:Number(r.id),deviceId:device,chat,role:r.role as StoredMessage['role'],content:String(r.content),meta:r.meta as string|null,createdAt:Number(r.created_at)}));
   }

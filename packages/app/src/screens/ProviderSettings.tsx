@@ -3,9 +3,9 @@ import type { ProviderPage, ProviderPublic, ProviderSlot, ProviderTestResult, Pr
 import { api, ApiError } from '../api';
 
 interface Editor { id: string | null; slot: ProviderSlot; adapter:ProviderWrite['adapter']; version?: number; name: string; baseUrl: string; modelId: string; canonicalModelId: string;
-  enabled: boolean; toolCalls: boolean; structuredOutput: boolean; vision: boolean; secretAction: 'keep' | 'replace' | 'remove'; apiKey: string }
+  enabled: boolean; toolCalls: boolean; structuredOutput: boolean; vision: boolean; nativePdf?:boolean;pdfMaxPages?:number; secretAction: 'keep' | 'replace' | 'remove'; apiKey: string }
 function fresh(slot: ProviderSlot): Editor { return { id: null, slot, adapter:'openai_compatible', name: '', baseUrl: 'https://api.openai.com/v1', modelId: '', canonicalModelId: '', enabled: true,
-  toolCalls: slot === 'chat', structuredOutput: slot === 'organizer', vision: false, secretAction: 'replace', apiKey: '' }; }
+  toolCalls: slot === 'chat', structuredOutput: slot === 'organizer', vision: false,nativePdf:false,pdfMaxPages:3, secretAction: 'replace', apiKey: '' }; }
 
 export function ProviderSettings({ onUnauthorized }: { onUnauthorized: () => void }) {
   const [page, setPage] = useState<ProviderPage | null>(null);
@@ -30,7 +30,7 @@ export function ProviderSettings({ onUnauthorized }: { onUnauthorized: () => voi
     e.preventDefault(); if (!editor) return;
     const f = editor;
     const body: ProviderWrite = { name: f.name, adapter: f.adapter, baseUrl: f.baseUrl, modelId: f.modelId, canonicalModelId: f.canonicalModelId || null,
-      enabled: f.enabled, capabilities: { toolCalls: f.toolCalls, vision: f.vision, structuredOutput: f.structuredOutput }, expectedVersion: f.version,
+      enabled: f.enabled, capabilities: { toolCalls: f.toolCalls, vision: f.vision, structuredOutput: f.structuredOutput,nativePdf:f.nativePdf??false,pdfMaxPages:f.pdfMaxPages??3,pdfMaxBytes:5*1024*1024 }, expectedVersion: f.version,
       secretUpdate: f.secretAction === 'replace' ? { action: 'replace', apiKey: f.apiKey } : { action: f.secretAction } };
     void work(async () => {
       const saved = f.id ? await api.updateProvider(f.id, body) : await api.createProvider(f.slot, body);
@@ -86,6 +86,8 @@ export function ProviderSettings({ onUnauthorized }: { onUnauthorized: () => voi
         <details><summary>Возможности модели</summary>
           <label className="check-label"><input type="checkbox" checked={editor.toolCalls} onChange={e => setEditor({ ...editor, toolCalls: e.target.checked })} />Вызов инструментов для работы с заметками</label>
           <label className="check-label"><input type="checkbox" checked={editor.structuredOutput} onChange={e => setEditor({ ...editor, structuredOutput: e.target.checked })} />Структурированный JSON</label>
+          <label className="check-label"><input type="checkbox" checked={editor.nativePdf??false} onChange={e=>setEditor({...editor,nativePdf:e.target.checked})}/>Модель принимает PDF напрямую (отдельно от изображений)</label>
+          {editor.nativePdf&&<label>Страниц PDF в одном пакете<input className="field" type="number" min={1} max={3} value={editor.pdfMaxPages??3} onChange={e=>setEditor({...editor,pdfMaxPages:Number(e.target.value)})}/></label>}
           <label className="check-label"><input type="checkbox" checked={editor.vision} onChange={e => setEditor({ ...editor, vision: e.target.checked })} />Изображения (проверяется тестом подключения)</label>
         </details>
         <div className="task-toolbar"><button className="btn" type="submit">{busy ? 'Сохраняю…' : 'Сохранить профиль'}</button><button className="btn secondary" type="button" onClick={() => setEditor(null)}>Отмена</button></div>

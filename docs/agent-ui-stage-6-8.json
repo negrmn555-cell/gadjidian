@@ -1,0 +1,33 @@
+{
+  "viewports": [
+    {
+      "width": 320,
+      "scroll": 320,
+      "overflow": false,
+      "toolCards": 2
+    },
+    {
+      "width": 390,
+      "scroll": 390,
+      "overflow": false,
+      "toolCards": 2
+    },
+    {
+      "width": 1440,
+      "scroll": 1440,
+      "overflow": false,
+      "toolCards": 2
+    }
+  ],
+  "reconnect": true,
+  "preferences": true,
+  "conflict": true,
+  "documents": true,
+  "fileReuse": true,
+  "keyboard": true,
+  "reducedMotion": true,
+  "externalProvider": false,
+  "browserErrors": [],
+  "providerCalls": 3,
+  "documentCalls": 1
+}

@@ -130,7 +130,9 @@ test('failed publish keeps the local commit and a later push marks the operation
   const unavailable = path.join(f.root, 'unavailable.git');
   await run('git', ['init', '--bare', '-b', 'main', remote]);
   f.cfg.sync.remote = remote;
-  await run('git', ['remote', 'add', 'origin', unavailable], { cwd: f.cfg.vault.root });
+  await run('git', ['remote', 'add', 'origin', remote], { cwd: f.cfg.vault.root });
+  await f.sync.pull();
+  await run('git', ['remote', 'set-url', 'origin', unavailable], { cwd: f.cfg.vault.root });
   const created = await f.tasks.create(taskInput, 'publish-retry-operation');
   assert.equal(created.receipt.state, 'committed');
   await assert.rejects(f.sync.push());
@@ -183,7 +185,7 @@ test('legacy message migration is repeatable, preserves IDs and discards message
   migrated.close();
   const check = new DatabaseSync(file);
   assert.equal(check.prepare("SELECT name FROM sqlite_master WHERE name = 'messages'").get(), undefined);
-  assert.equal((check.prepare('SELECT COUNT(*) AS n FROM schema_migrations').get() as { n: number }).n, 5);
+  assert.equal((check.prepare('SELECT COUNT(*) AS n FROM schema_migrations').get() as { n: number }).n, 8);
   check.close();
 });
 

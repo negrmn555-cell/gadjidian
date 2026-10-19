@@ -56,7 +56,11 @@ export class Vault {
   private readonly privateFolders: string[];
   private writeBackend?: VaultWriteBackend;
   private readGuard?:<T>(work:()=>Promise<T>)=>Promise<T>;
+  private readonly changeListeners = new Set<(paths?: string[]) => void>();
+  onChange(listener: (paths?: string[]) => void): () => void { this.changeListeners.add(listener); return () => this.changeListeners.delete(listener); }
+  notifyChanged(paths?: string[]): void { for (const listener of this.changeListeners) listener(paths); }
   setReadGuard(guard:<T>(work:()=>Promise<T>)=>Promise<T>):void{this.readGuard=guard;}
+  readConsistent<T>(work: () => Promise<T>): Promise<T> { return this.readGuard ? this.readGuard(work) : work(); }
 
   setWriteBackend(backend: VaultWriteBackend): void {
     if (this.writeBackend) throw new Error('Vault write backend is already configured');
@@ -93,7 +97,7 @@ export class Vault {
 
   isPrivate(rel: string): boolean {
     const normalized = normalizeRel(rel).toLowerCase();
-    return this.privateFolders.some((pf) => normalized === pf.toLowerCase() || normalized.startsWith(pf.toLowerCase() + '/'));
+    return (this.config.privateFolders ?? []).map(normalizeRel).filter(Boolean).some((pf) => normalized === pf.toLowerCase() || normalized.startsWith(pf.toLowerCase() + '/'));
   }
 
   isIgnored(rel: string): boolean {
@@ -227,6 +231,7 @@ export class Vault {
       await fs.writeFile(tmp, content, 'utf8');
       await fs.rename(tmp, abs);
     } finally { await fs.rm(tmp, { force: true }); }
+    this.notifyChanged([normalizeRel(p)]);
     return normalizeRel(p);
   }
 

@@ -6,7 +6,9 @@ export function Markdown({ text }: { text: string }) {
   const out: ReactNode[] = [];
   let inCode = false;
   let code: string[] = [];
+  let tableThrough = -1;
   lines.forEach((line, i) => {
+    if (i <= tableThrough) return;
     if (line.trim().startsWith('```')) {
       if (inCode) {
         out.push(
@@ -21,6 +23,15 @@ export function Markdown({ text }: { text: string }) {
     }
     if (inCode) {
       code.push(line);
+      return;
+    }
+    const header = tableCells(line), separator = tableCells(lines[i + 1] ?? '');
+    if (line.includes('|') && header.length > 0 && separator.length === header.length && separator.every(cell => /^:?-{3,}:?$/.test(cell))) {
+      const rows: string[][] = [];
+      let end = i + 2;
+      while (end < lines.length && lines[end].includes('|') && lines[end].trim()) rows.push(tableCells(lines[end++]));
+      tableThrough = end - 1;
+      out.push(<div className="markdown-table" key={'t' + i} tabIndex={0} role="region" aria-label="Таблица"><table><thead><tr>{header.map((cell, c) => <th key={c} scope="col">{inline(cell)}</th>)}</tr></thead><tbody>{rows.map((row, r) => <tr key={r}>{header.map((_, c) => <td key={c}>{inline(row[c] ?? '')}</td>)}</tr>)}</tbody></table></div>);
       return;
     }
     const h = /^(#{1,6})\s+(.*)$/.exec(line);
@@ -75,7 +86,21 @@ export function Markdown({ text }: { text: string }) {
     }
     out.push(<div key={i}>{inline(line)}</div>);
   });
+  if (inCode && code.length) out.push(<pre className="markdown-code" key="unfinished-code">{code.join('\n')}</pre>);
   return <>{out}</>;
+}
+
+function tableCells(line: string): string[] {
+  const cells: string[] = []; let cell = '', code = false, wiki = false;
+  const value = line.trim().replace(/^\|/, '').replace(/\|$/, '');
+  for (let i = 0; i < value.length; i++) {
+    if (value[i] === '\\' && value[i + 1] === '|') { cell += '|'; i++; continue; }
+    if (value[i] === '`') code = !code;
+    if (value.slice(i, i + 2) === '[[') wiki = true;
+    if (value.slice(i - 1, i + 1) === ']]') wiki = false;
+    if (value[i] === '|' && !code && !wiki) { cells.push(cell.trim()); cell = ''; } else cell += value[i];
+  }
+  cells.push(cell.trim()); return cells;
 }
 
 function inline(s: string): ReactNode {

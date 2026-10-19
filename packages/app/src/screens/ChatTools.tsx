@@ -1,3 +1,4 @@
+import { PreferencesMemoryEditor } from './PreferencesMemory';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { categoryLabels, type Attachment, type ChatMemory, type ImportResult } from '@relay/core/contracts';
 import { api, ApiError } from '../api';
@@ -39,10 +40,14 @@ export function MemoryDialog({chatId,onClose,onOpenNote,onUnauthorized}:{chatId:
   const [memory,setMemory]=useState<ChatMemory|null>(null),[busy,setBusy]=useState(true),[error,setError]=useState('');
   const report=(e:unknown)=>{setError((e as Error).message);if(e instanceof ApiError&&e.status===401)onUnauthorized();};
   useEffect(()=>{let stale=false;api.memory(chatId).then(m=>{if(!stale)setMemory(m);}).catch(e=>{if(!stale)report(e);}).finally(()=>{if(!stale)setBusy(false);});return()=>{stale=true;};},[chatId]);
+  useEffect(()=>{if(memory?.refresh?.state!=='queued')return;let stale=false;const timer=setInterval(()=>void api.memory(chatId).then(m=>{if(!stale)setMemory(m);}).catch(e=>{if(!stale)report(e);}),1500);return()=>{stale=true;clearInterval(timer);};},[chatId,memory?.refresh?.state]);
   const update=async()=>{setBusy(true);setError('');try{setMemory(await api.summarize(chatId));}catch(e){report(e);}finally{setBusy(false);}};
   return <section className="note-editor"><div className="editor-heading"><h2>Память этого чата</h2><button className="icon-btn" aria-label="Закрыть память" disabled={busy} onClick={onClose}><Icon name="close"/></button></div><p className="muted">Резюме и ссылки помогают продолжить разговор. Изменённые заметки проверяются заново. Память удаляется вместе с историей через 14 дней.</p>
     {error&&<p className="error" role="alert">{error}</p>}{busy&&<p role="status">Проверяю память…</p>}
+    {memory?.refresh?.state==='queued'&&<p role="status">Резюме обновляется в фоне. Можно продолжить разговор.</p>}
+    {memory?.refresh?.state==='failed'&&<p className="error" role="alert">Не удалось обновить резюме. Попробуйте ещё раз.</p>}
     {memory&&<><h3>Краткое резюме</h3><p className="memory-summary">{memory.summary||'Резюме пока нет или его нужно пересобрать после изменения источников.'}</p><p className="muted">Обобщено реплик: {memory.coverage.length}</p><h3>Связанные заметки</h3>{memory.sources.map(s=><button key={s.noteId??s.path} className="card note-choice" disabled={s.state==='missing'||s.noteId?.startsWith('task_')} onClick={()=>onOpenNote(s.path)}><strong>{s.path.replace(/\.md$/,'')}</strong><small>{states[s.state]}</small></button>)}{!memory.sources.length&&<p className="muted">ИИ ещё не обращался к заметкам в этом чате.</p>}</>}
     <button className="btn" disabled={busy} onClick={()=>void update()}>Обновить резюме</button>
+    <PreferencesMemoryEditor onUnauthorized={onUnauthorized}/>
   </section>;
 }

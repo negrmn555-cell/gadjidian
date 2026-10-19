@@ -5,10 +5,14 @@ import { searchNotes } from './search.js';
 import { appendToDaily, createNote, dailyPath, ensureDaily, extractTasks } from './notes.js';
 import { cleanForDisplay, formatDate } from './templates.js';
 import { sourceVersion } from './source-version.js';
+import { measure } from './metrics.js';
 import type { MemorySource } from './contracts.js';
+import { parseMarkdownDocument } from './markdown-document.js';
 
 export interface ToolContext {
   vault: Vault;
+  /** External read-only clients must use an exact path, without title fallback. */
+  exactPathsOnly?:boolean;
   /** Called when the tool changes the vault. */
   onAction?: (kind: 'created' | 'appended' | 'updated', path: string) => void;
   onSource?: (path: string) => void;
@@ -17,6 +21,7 @@ export interface ToolContext {
 }
 
 export const toolDefinitions: ToolDefinition[] = [
+  { type: 'function', function: { name: 'read_section', description: 'Read one Markdown chunk using path and chunkId returned by search_notes. Does not authorize full-note replacement.', parameters: { type: 'object', properties: { path: { type: 'string' }, chunkId: { type: 'string' } }, required: ['path','chunkId'] } } },
   {
     type: 'function',
     function: {
@@ -156,6 +161,9 @@ type Args = Record<string, unknown>;
 const MAX_NOTE_CHARS = 12_000;
 
 export async function executeTool(name: string, args: Args, ctx: ToolContext): Promise<string> {
+  return measure('tool',()=>executeToolInternal(name,args,ctx));
+}
+async function executeToolInternal(name: string, args: Args, ctx: ToolContext): Promise<string> {
   const { vault } = ctx;
   try {
     switch (name) {
@@ -170,8 +178,16 @@ export async function executeTool(name: string, args: Args, ctx: ToolContext): P
         if (!hits.length) return 'No notes found.';
         hits.forEach((h) => {ctx.onSource?.(h.path);if(h.sourceVersion)ctx.onSourceVersion?.(h.sourceVersion);});
         return hits
-          .map((h) => `- ${h.path} (modified ${formatDate(new Date(h.mtime), 'YYYY-MM-DD')})\n  ${h.snippet}`)
+          .map((h) => `- ${h.path} (modified ${formatDate(new Date(h.mtime), 'YYYY-MM-DD')}; chunkId: ${h.chunkId ?? ''})\n  ${h.snippet}`)
           .join('\n');
+      }
+      case 'read_section': {
+        const note = await vault.readNote(String(args.path ?? ''));
+        const parsed = parseMarkdownDocument(note.path, note.content);
+        const chunk = parsed.chunks.find(c => c.id === args.chunkId);
+        if (!chunk) return 'Error: section changed or does not exist; search again.';
+        ctx.onSource?.(note.path); ctx.onSourceVersion?.(sourceVersion(note.path,note.content));
+        return `# ${note.path}\ncontentHash: ${parsed.contentHash}\ncomplete: false\nsection: ${chunk.headingPath.join(' > ')}\noffsets: ${chunk.start}-${chunk.end}\n\n${chunk.text.slice(0,MAX_NOTE_CHARS)}`;
       }
       case 'read_note': {
         const p = String(args.path ?? '');
@@ -179,6 +195,7 @@ export async function executeTool(name: string, args: Args, ctx: ToolContext): P
         try {
           note = await vault.readNote(p);
         } catch (e) {
+          if(ctx.exactPathsOnly)throw e;
           if (!(e instanceof VaultError) || e.code !== 'NOT_FOUND') throw e;
           const found = await vault.findByTitle(p);
           if (found.length === 0) return `Note not found: ${p}`;

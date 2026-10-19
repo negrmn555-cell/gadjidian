@@ -1,7 +1,8 @@
+import { isPreferencesPath } from '@relay/core';
 import { randomUUID, createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { DomainError, VaultError, hashContent, readTaskDocument, type MutationReceipt, type Vault, type VaultWriteInput } from '@relay/core';
+import { DomainError, VaultError, hashContent, readTaskDocument, measure, type MutationReceipt, type Vault, type VaultWriteInput } from '@relay/core';
 import type { Db, VaultOperation, VaultBatch } from './db.js';
 import type { GitSync } from './sync.js';
 
@@ -32,6 +33,7 @@ export class VaultMutationService {
   }
 
   async write(input: VaultWriteInput): Promise<string> {
+    if(isPreferencesPath(input.path))throw new DomainError('PREFERENCES_PROTECTED','Изменяйте правила через раздел памяти.',403);
     const receipt = await this.mutate({
       operationId: randomUUID(), request: input,
       prepare: async () => {
@@ -47,6 +49,9 @@ export class VaultMutationService {
   }
 
   mutate(input: MutationRequest): Promise<MutationReceipt> {
+    return measure('mutation',()=>this.mutateInternal(input));
+  }
+  private mutateInternal(input: MutationRequest): Promise<MutationReceipt> {
     if (!/^[A-Za-z0-9_-]{8,128}$/.test(input.operationId)) return Promise.reject(new DomainError('VALIDATION_ERROR', 'Некорректный operationId.'));
     const requestHash = fingerprint(input.request);
     return this.sync.exclusive(async () => {
@@ -59,7 +64,7 @@ export class VaultMutationService {
       }
       for (const pending of this.db.operationsIn(['prepared'])) await this.finish(pending);
       for (const pending of this.db.batchesIn(['prepared'])) await this.finishBatch(pending);
-      await this.sync.assertWritable();
+      await this.sync.ensureFreshForWrite();
       const plan = await input.prepare();
       await this.vault.safePath(plan.path);
       readTaskDocument(plan.content, plan.path);
@@ -126,6 +131,7 @@ export class VaultMutationService {
     const commit = await this.sync.commitPaths([op.path], op.operationId);
     this.db.updateOperation(op.operationId, commit ? 'committed' : 'saved_local', commit);
     this.sync.schedulePush();
+    this.vault.notifyChanged([op.path]);
   }
 
   private receipt(op: VaultOperation): MutationReceipt {
@@ -140,13 +146,16 @@ export class VaultMutationService {
     return {result:b.result,receipt:this.batchReceipt(b)};
   }
   mutateBatch(input:BatchRequest):Promise<{result:unknown;receipt:MutationReceipt}> {
+    return measure('mutation',()=>this.mutateBatchInternal(input));
+  }
+  private mutateBatchInternal(input:BatchRequest):Promise<{result:unknown;receipt:MutationReceipt}> {
     if(!/^[A-Za-z0-9_-]{8,128}$/.test(input.operationId))return Promise.reject(new DomainError('VALIDATION_ERROR','Некорректный operationId.'));
     return this.sync.exclusive(async()=>{
       const old=this.db.getBatch(input.operationId),requestHash=fingerprint(input.request);
       if(old){if(old.requestHash!==requestHash)throw new DomainError('IDEMPOTENCY_KEY_REUSED','operationId уже использован для другого импорта.',409);if(old.state==='conflict')throw new DomainError('VERSION_CONFLICT','Импорт конфликтует с текущими файлами.',409);if(old.state==='prepared')await this.finishBatch(old);const b=this.db.getBatch(input.operationId)!;return {result:b.result,receipt:this.batchReceipt(b)};}
       for(const p of this.db.operationsIn(['prepared']))await this.finish(p);
       for(const p of this.db.batchesIn(['prepared']))await this.finishBatch(p);
-      await this.sync.assertWritable();input.guard?.();
+      await this.sync.ensureFreshForWrite();input.guard?.();
       if(input.expectedHead!==undefined && await this.sync.head()!==input.expectedHead)throw new DomainError('HEAD_CONFLICT','Git изменился после планирования. Постройте новый план.',409);
       const plan=await input.prepare();
       if(!plan.files.length || plan.files.length>256 || plan.files.reduce((n,f)=>n+f.bytes.length,0)>40*1024*1024)throw new DomainError('IMPORT_LIMIT','Импорт превышает лимит 256 файлов / 40 МБ.');
@@ -174,7 +183,7 @@ export class VaultMutationService {
     }
     for(const f of b.files)if(await fs.readFile(await this.vault.safePath(f.path)).then(hashBytes).catch(e=>{if(e.code==='ENOENT')return null;throw e;})!==(f.delete?null:f.contentHash)){this.db.updateBatch(b.operationId,'conflict',null,'VERSION_CONFLICT');throw new DomainError('VERSION_CONFLICT','Файлы импорта изменились перед коммитом. Проверьте локальную запись.',409);}
     guard?.();
-    const sha=await this.sync.commitPaths(b.files.map(f=>f.path),b.operationId);this.db.updateBatch(b.operationId,sha?'committed':'saved_local',sha);this.sync.schedulePush();
+    const sha=await this.sync.commitPaths(b.files.map(f=>f.path),b.operationId);this.db.updateBatch(b.operationId,sha?'committed':'saved_local',sha);this.sync.schedulePush();this.vault.notifyChanged(b.files.map(f=>f.path));
   }
   private batchReceipt(b:VaultBatch):MutationReceipt {
     const md=b.files.find(f=>!f.delete&&f.path.endsWith('.md'))??b.files[0];return {operationId:b.operationId,path:md.path,contentHash:md.contentHash,commitSha:b.commitSha,state:b.state==='synced'?'synced':b.commitSha?'committed':'saved_local'};

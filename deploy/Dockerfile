@@ -9,9 +9,12 @@ RUN npm ci --ignore-scripts
 COPY tsconfig.base.json ./
 COPY packages ./packages
 RUN npm run build
+RUN npm prune --omit=dev --ignore-scripts
 
 # ---- runtime ----
 FROM node:22-alpine
+ARG APP_REVISION=unknown
+LABEL org.opencontainers.image.revision=$APP_REVISION
 RUN apk add --no-cache git openssh-client tini
 WORKDIR /app
 ENV NODE_ENV=production

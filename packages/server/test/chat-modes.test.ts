@@ -27,6 +27,13 @@ async function fixture(t:{after:(fn:()=>Promise<void>)=>void}){
 }
 const draft=(deadline:unknown=null,evidence:unknown=null,state='needs_input')=>({state,question:state==='ready'?'':'Когда выполнить?',deadlineEvidence:evidence,task:{title:'Подготовить доклад',description:'История',category:'study',priority:'high',keywords:['доклад','история'],tags:[],relatedNoteIds:[],deadline}});
 function llm(output:unknown){return new LlmClient({baseUrl:'https://example.test/v1',model:'test',apiKey:''},async()=>new Response(JSON.stringify({choices:[{message:{role:'assistant',content:typeof output==='string'?output:JSON.stringify(output)},finish_reason:'stop'}]})));}
+for(const engine of ['legacy','mastra'] as const)test(engine+': task mode keeps strict deadline validation and never exposes raw JSON deltas',async t=>{
+  const f=await fixture(t);let chat=f.db.chats.create(1,'runtime-task-parity','UTC');chat=f.db.chats.changeMode(1,chat.id,'task',1);const events:import('@relay/core').AgentEvent[]=[];
+  const request={device:1,chat,text:'Подготовить доклад',operationId:'runtime_task_parity',history:[],llm:llm(draft()),signal:new AbortController().signal,onEvent:(e:import('@relay/core').AgentEvent)=>events.push(e),toolsEnabled:true,structuredOutput:true,engine};
+  const result=await f.modes.run(request);assert.equal(result.actions.length,0);assert.equal((await f.tasks.list()).items.length,0);assert.equal(events.some(e=>e.type==='delta'),false);assert(f.db.chats.get(1,chat.id).pendingTask);
+  const direct=await f.modes.run({...request,chat:f.db.chats.get(1,chat.id),text:'/quick запись'});assert.equal(direct.actions.length,0);assert.match(direct.text,/недоступны/);
+  const fileDeadline=await f.modes.run({...request,chat:f.db.chats.get(1,chat.id),userText:'Подготовить доклад',text:'Подготовить доклад\nФайл: До 5 октября 2026',llm:llm(draft({kind:'by_date',date:'2026-10-05'},'До 5 октября 2026','ready'))});assert.equal(fileDeadline.actions.length,0);assert.equal((await f.tasks.list()).items.length,0);
+});
 async function run(f:Awaited<ReturnType<typeof fixture>>,chat:ChatSession,text:string,output:unknown,history:{role:'user'|'assistant';content:string}[]=[]):Promise<AgentResult>{return f.modes.run({device:1,chat,text,operationId:'mode_'+text.length+'_'+chat.id.replaceAll('-','_'),history,llm:llm(output),signal:new AbortController().signal,onEvent:()=>{},toolsEnabled:true,structuredOutput:true});}
 
 test('fresh entries create distinct chats while effect replay is idempotent, mode survives restart',async t=>{

@@ -4,6 +4,7 @@ import type { Db, Device } from './db.js';
 declare module 'fastify' {
   interface FastifyRequest {
     device?: Device;
+    authDurationMs?: number;
   }
 }
 
@@ -20,6 +21,7 @@ export function extractToken(req: FastifyRequest): string | null {
 export function makeAuth(db: Db, opts: { kinds?: ('app' | 'quick')[] } = {}) {
   const kinds = opts.kinds ?? ['app'];
   return async function auth(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const started=performance.now();
     const token = extractToken(req);
     if (!token) {
       reply.code(401).send({ error: 'missing token' });
@@ -36,6 +38,7 @@ export function makeAuth(db: Db, opts: { kinds?: ('app' | 'quick')[] } = {}) {
     }
     db.touchDevice(device.id);
     req.device = device;
+    req.authDurationMs=performance.now()-started;
   };
 }
 

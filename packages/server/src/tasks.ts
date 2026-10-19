@@ -1,20 +1,21 @@
 import { createHash } from 'node:crypto';
-import { DomainError, createTaskDocument, updateTaskDocument, readTaskDocument, hashContent, searchNotes, sourceVersion, vaultLinks, validateTaskCreate, validateTaskPatch, type TaskCreateInput, type LegacyTask, type Task, type TaskPage, type TaskWriteResult, type Vault } from '@relay/core';
+import { DomainError, createTaskDocument, updateTaskDocument, readTaskDocument, hashContent, searchNotes, sourceVersion, vaultLinks, validateTaskCreate, validateTaskPatch, getSearchIndex, type TaskCreateInput, type LegacyTask, type Task, type TaskPage, type TaskWriteResult, type Vault } from '@relay/core';
 import type { VaultMutationService } from './vault-mutations.js';
 import {noteKeywords} from './notes.js';
 
 const folders = { study: 'Study', work: 'Work', personal: 'Personal' };
 
 export class TaskService {
-  constructor(private readonly vault: Vault, private readonly mutations: VaultMutationService, private readonly now = () => new Date().toISOString()) {}
+  constructor(private readonly vault: Vault, private readonly mutations: VaultMutationService, private readonly now = () => new Date().toISOString(), private readonly projection?:{tasks():Promise<TaskPage>}) {}
   private async enrich(input:TaskCreateInput):Promise<TaskCreateInput>{const keywords=input.keywords.length?input.keywords:noteKeywords(input.title+' '+input.description),hits=keywords.length?await searchNotes(this.vault,keywords.slice(0,5).join(' '),{limit:5}):[],links=vaultLinks(input.description);const missing=hits.filter(n=>n.score>0&&!links.some(l=>l.target.replace(/\.md$/i,'')===n.path.replace(/\.md$/i,'')));const ids:string[]=[];for(const n of hits)try{const id=sourceVersion(n.path,(await this.vault.readNote(n.path)).content).noteId;if(id)ids.push(id);}catch{}return {...input,keywords,relatedNoteIds:[...new Set([...input.relatedNoteIds,...ids])],description:input.description+(missing.length?'\n\n## Связанные заметки\n'+missing.map(n=>'- [['+n.path.replace(/\.md$/i,'')+']]').join('\n'):'')};}
 
   async list(): Promise<TaskPage> {
+    if(this.projection)return this.projection.tasks();
     const result: TaskPage = { items: [], invalidRecords: [] };
     const groups = new Map<string, Task[]>();
-    for (const meta of await this.vault.listNotes()) {
+    for (const {meta,parsed} of await getSearchIndex(this.vault).documents()) {
       try {
-        const task = readTaskDocument((await this.vault.readNote(meta.path)).content, meta.path);
+        const task = readTaskDocument(parsed.content, meta.path);
         if (!task) continue;
         groups.set(task.id, [...(groups.get(task.id) ?? []), task]);
       } catch (e) { result.invalidRecords.push({ path: meta.path, error: (e as Error).message }); }

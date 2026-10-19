@@ -1,6 +1,7 @@
+import { isPreferencesPath } from '@relay/core';
 import { randomUUID } from 'node:crypto';
 import { Document, parseDocument, isMap } from 'yaml';
-import { DomainError, objectInput, hashContent, readTaskDocument, sanitizeFileName, searchNotes, type Vault, type NoteCreateInput, type NoteRecord, type NotePage, type NoteEditInput, type NoteWriteResult } from '@relay/core';
+import { DomainError, objectInput, hashContent, readTaskDocument, sanitizeFileName, searchNotes, parseFrontmatter, getSearchIndex, type Vault, type NoteCreateInput, type NoteRecord, type NotePage, type NoteEditInput, type NoteWriteResult } from '@relay/core';
 import type { VaultMutationService } from './vault-mutations.js';
 
 const folders = { study: 'Study', work: 'Work', personal: 'Personal' };
@@ -20,12 +21,8 @@ export function validateNote(value: unknown): NoteCreateInput {
   return { title: v.title.trim(), body: v.body, kind: v.kind as NoteCreateInput['kind'], category: v.category as NoteCreateInput['category'], tags: strings(v.tags,'tags'), keywords: strings(v.keywords,'keywords'), aliases: strings(v.aliases,'aliases'), person: {phone:p.phone as string,email:p.email as string,role:p.role as string} };
 }
 function split(content: string) {
-  const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(content);
-  if (content.startsWith('---') && !match) throw new DomainError('INVALID_FRONTMATTER', 'Не закрыт YAML-блок заметки. Исправьте исходник в Obsidian.');
-  const doc = match ? parseDocument(match[1], { uniqueKeys:true }) : new Document({});
-  if (doc.errors.length || doc.contents && !isMap(doc.contents)) throw new DomainError('INVALID_FRONTMATTER', 'Некорректный YAML заметки. Данные не изменены.');
-  const metadata = doc.toJS({maxAliasCount:32}) ?? {};
-  return { doc, metadata, body: content.slice(match?.[0].length ?? 0).replace(/^\s*\n/, '') };
+  const parsed = parseFrontmatter(content);
+  return { ...parsed, body: parsed.body.replace(/^\s*\n/, '') };
 }
 function assertOrdinary(path: string, content: string): void {
   if (!path.toLowerCase().endsWith('.md') || /^Areas\/[^/]+\/Tasks\//i.test(path) || readTaskDocument(content,path)) throw new DomainError('NOTE_NOT_EDITABLE', 'Управляемые задачи изменяются в области задач.');
@@ -34,16 +31,18 @@ export function readNoteRecord(path: string, content: string, updatedAt: number)
   assertOrdinary(path,content);
   const {metadata:m,body}=split(content);
   const list=(v:unknown)=>Array.isArray(v)?v.filter(x=>typeof x==='string') as string[]:typeof v==='string'?[v]:[];
-  const kind=['quick','idea','person'].includes(m.type)?m.type:/^People\//i.test(path)?'person':'quick';
-  return {id:typeof m.id==='string'?m.id:null,path,content,contentHash:hashContent(content),updatedAt,title:typeof m.title==='string'?m.title:(/^#\s+(.+)$/m.exec(body)?.[1]??path.split('/').at(-1)!.replace(/\.md$/i,'')),body,kind,category:['study','work','personal'].includes(m.category)?m.category:'personal',tags:list(m.tags),keywords:list(m.keywords),aliases:list(m.aliases),person:{phone:typeof m.phone==='string'?m.phone:'',email:typeof m.email==='string'?m.email:'',role:typeof m.role==='string'?m.role:''}};
+  const kind:NoteRecord['kind']=['quick','idea','person'].includes(String(m.type))?m.type as NoteRecord['kind']:/^People\//i.test(path)?'person':'quick';
+  return {id:typeof m.id==='string'?m.id:null,path,content,contentHash:hashContent(content),updatedAt,title:typeof m.title==='string'?m.title:(/^#\s+(.+)$/m.exec(body)?.[1]??path.split('/').at(-1)!.replace(/\.md$/i,'')),body,kind,category:['study','work','personal'].includes(String(m.category))?m.category as NoteRecord['category']:'personal',tags:list(m.tags),keywords:list(m.keywords),aliases:list(m.aliases),person:{phone:typeof m.phone==='string'?m.phone:'',email:typeof m.email==='string'?m.email:'',role:typeof m.role==='string'?m.role:''}};
 }
 export class NoteService {
   constructor(readonly vault: Vault, private readonly mutations: VaultMutationService) {}
   async list(query=''): Promise<NotePage> {
     const items:NotePage['items']=[],invalidRecords:NotePage['invalidRecords']=[];
-    for (const meta of (await this.vault.listNotes()).sort((a,b)=>b.mtime-a.mtime)) {
+    const documents = await getSearchIndex(this.vault).documents();
+    const matches = query ? new Set((await searchNotes(this.vault, query, { limit: 100 })).map(h => h.path)) : null;
+    for (const { meta, parsed } of documents.sort((a,b)=>b.meta.mtime-a.meta.mtime)) {
       if (/^Areas\/[^/]+\/Tasks\//i.test(meta.path)) continue;
-      try { const n=await this.get(meta.path); if(query && !(n.title+' '+n.path+' '+n.tags.join(' ')+' '+n.aliases.join(' ')).toLowerCase().includes(query.toLowerCase()))continue; const {content:_c,body:_b,...brief}=n; items.push(brief); }
+      try { if(matches && !matches.has(meta.path))continue; const n=readNoteRecord(meta.path,parsed.content,meta.mtime); const {content:_c,body:_b,...brief}=n; items.push(brief); }
       catch(e) { if(e instanceof DomainError && e.code==='NOTE_NOT_EDITABLE')continue; invalidRecords.push({path:meta.path,error:e instanceof DomainError?e.message:'Не удалось прочитать заметку.'}); }
     }
     return {items,invalidRecords};
@@ -61,6 +60,7 @@ export class NoteService {
     return {note:await this.get(receipt.path),receipt};
   }
   async update(path:string,value:NoteEditInput,expectedHash:string,operationId:string,signal?:AbortSignal,preserveUnknown=false):Promise<NoteWriteResult> {
+    if(isPreferencesPath(path))throw new DomainError('PREFERENCES_PROTECTED','Изменяйте правила через раздел памяти.',403);
     if (!/^[a-f0-9]{64}$/.test(expectedHash))throw new DomainError('INVALID_HASH','Для сохранения нужна версия заметки.');
     if (!!value.fields === (typeof value.content==='string'))throw new DomainError('INVALID_NOTE','Передайте поля или полный исходник заметки.');
     const fields=value.fields?validateNote(value.fields):null;
