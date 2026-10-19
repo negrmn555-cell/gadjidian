@@ -37,6 +37,7 @@ export class Scheduler {
   }
   private populate():void {
     const s=this.settings.get(),now=this.now();
+    if(this.handlers.archive_completed)this.enqueue('archive_completed','archive-completed:'+Math.floor(now/3600000),now,s.version);
     for(const [kind,rule] of [['organize',s.organizer],['weekly_digest',s.digest]] as const) {
       if(!rule.enabled)continue;
       const date=localDate(now,rule.timezone),base=Date.parse(date+'T12:00:00Z');
@@ -65,7 +66,7 @@ export class Scheduler {
     if(!row)return;
     const changed=this.db.sql.prepare("UPDATE jobs SET state='running',attempt=attempt+1,lease_owner=?,lease_until=?,fencing_token=fencing_token+1 WHERE id=? AND state='queued'").run(this.owner,this.now()+60000,row.id);
     if(!changed.changes)return;const token=row.fencing_token+1;
-    const operational=row.kind==='extract'||row.kind==='summarize'||row.kind==='document';
+    const operational=row.kind==='extract'||row.kind==='summarize'||row.kind==='document'||row.kind==='archive_completed';
     const assert=()=>{const r=this.db.sql.prepare('SELECT state,lease_owner,lease_until,fencing_token FROM jobs WHERE id=?').get(row.id) as unknown as JobRow;const s=this.settings.get();const enabled=operational||(row.kind==='organize'?s.organizer.enabled:s.digest.enabled);
       if(!r||r.state!=='running'||r.lease_owner!==this.owner||r.fencing_token!==token||Number(r.lease_until)<=this.now())throw new DomainError('LEASE_LOST','Исполнитель задания потерял право записи.',409);
       if(!operational&&(!enabled||s.version!==row.settings_version))throw new DomainError('JOB_CANCELLED','Расписание изменено или отключено.',409);};

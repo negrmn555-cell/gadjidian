@@ -5,6 +5,7 @@ import type { ChatStore } from './chat-store.js';
 import { VaultMutationService, hashBytes } from './vault-mutations.js';
 import { decodeUpload } from './attachments.js';
 import { noteKeywords } from './notes.js';
+import { allocateRecordTitle, recordFileName } from './record-codes.js';
 const folders={study:'Study',work:'Work',personal:'Personal'};
 interface AssetManifest {schema:1;assetId:string;originalPath:string;originalName:string;originalHash:string;notePath:string;status:'complete'|'partial';extractor:string;languages:string[];pages:{number:number;method:string;characters:number;confidence:number|null;warnings:string[]}[];warnings:string[];files:{path:string;hash:string;size:number}[]}
 export class ImportService {
@@ -19,7 +20,7 @@ export class ImportService {
     const report:ExtractionReport=file.report??(await decodeUpload(file.name,file.bytes,true)).report!;
     // Same original and processing policy have one permanent asset, regardless of upload ID/name.
     const sha=hashBytes(file.bytes),assetId='asset_'+hashContent(sha+'\n'+report.version+'\nrus+eng'+(report.pages.some(p=>p.interpretation)?'\n'+hashContent(JSON.stringify(report.pages.map(p=>p.interpretation??null))):'')),root='_attachments/'+assetId;
-    const originalPath=root+'/original'+path.extname(file.name).toLowerCase(),manifestPath=root+'/manifest.json',notePath='Areas/'+folders[input.category as keyof typeof folders]+'/Notes/import-'+assetId.slice(6,22)+'.md';
+    const originalPath=root+'/original'+path.extname(file.name).toLowerCase(),manifestPath=root+'/manifest.json';
     const warnings=[...report.warnings,...report.pages.flatMap(p=>p.warnings.map(w=>'Страница / раздел '+p.number+': '+w))];
     const result=await this.mutations.mutateBatch({operationId,request,prepare:async()=>{
       if(await this.vault.exists(manifestPath)){
@@ -28,9 +29,11 @@ export class ImportService {
       }
       const files:{path:string;bytes:Buffer;baseHash:null}[]=[{path:originalPath,bytes:file.bytes,baseHash:null}];
       for(const [i,image] of report.images.entries()){const ext=image.mediaType==='image/png'?'.png':image.mediaType==='image/jpeg'?'.jpg':'.webp';files.push({path:root+'/images/image-'+(i+1)+ext,bytes:Buffer.from(image.base64,'base64'),baseHash:null});}
-      const metadata={relay_schema:1,id:'note_'+assetId.slice(6),title:String(input.title).trim(),type:'quick',category:input.category,tags:[input.category,'import'],keywords:noteKeywords(input.title+' '+report.pages.map(p=>p.text).join('\n').slice(0,5000)),asset_id:assetId,created_at:new Date().toISOString()};
+      const title=await allocateRecordTitle(this.vault,String(input.title).trim());
+      const notePath='Areas/'+folders[input.category as keyof typeof folders]+'/Notes/'+recordFileName(title)+'.md';
+      const metadata={relay_schema:1,id:'note_'+assetId.slice(6),title,type:'quick',category:input.category,tags:[input.category,'import'],keywords:noteKeywords(input.title+' '+report.pages.map(p=>p.text).join('\n').slice(0,5000)),asset_id:assetId,created_at:new Date().toISOString()};
       const intro='Импорт: **'+(report.status==='complete'?'Все страницы / разделы обработаны':'Частичный — проверьте пропуски')+'**. OCR требует сверки с оригиналом.\n\nОригинал: [['+originalPath+']]\nManifest: [['+manifestPath+']]';
-      const content='---\n'+Object.entries(metadata).map(([k,v])=>k+': '+JSON.stringify(v)).join('\n')+'\n---\n\n# '+String(input.title).trim()+'\n\n'+intro+(warnings.length?'\n\n## Замечания\n'+warnings.map(w=>'- '+w).join('\n'):'')+'\n\n## Полный извлечённый текст\n\n'+report.pages.map(p=>'### Страница / раздел '+p.number+' · '+(p.method==='ocr'?'OCR':'текст')+'\n\n'+(p.text||'[Текст не извлечён — см. оригинал]')+(p.interpretation?'\n\n#### Отдельная интерпретация модели · '+p.interpretation.model+'\n\n'+p.interpretation.text+'\n\nНе заменяет исходный текст и оригинал страницы.':'')).join('\n\n')+(report.images.length?'\n\n## Изображения\n'+files.slice(1).map(f=>'![['+f.path+']]').join('\n'):'')+'\n';
+      const content='---\n'+Object.entries(metadata).map(([k,v])=>k+': '+JSON.stringify(v)).join('\n')+'\n---\n\n# '+title+'\n\n'+intro+(warnings.length?'\n\n## Замечания\n'+warnings.map(w=>'- '+w).join('\n'):'')+'\n\n## Полный извлечённый текст\n\n'+report.pages.map(p=>'### Страница / раздел '+p.number+' · '+(p.method==='ocr'?'OCR':'текст')+'\n\n'+(p.text||'[Текст не извлечён — см. оригинал]')+(p.interpretation?'\n\n#### Отдельная интерпретация модели · '+p.interpretation.model+'\n\n'+p.interpretation.text+'\n\nНе заменяет исходный текст и оригинал страницы.':'')).join('\n\n')+(report.images.length?'\n\n## Изображения\n'+files.slice(1).map(f=>'![['+f.path+']]').join('\n'):'')+'\n';
       files.push({path:notePath,bytes:Buffer.from(content),baseHash:null});
       const manifest:AssetManifest={schema:1,assetId,originalPath,originalName:file.name,originalHash:sha,notePath,status:report.status,extractor:report.version,languages:['rus','eng'],pages:report.pages.map(({text,...p})=>({...p,characters:text.length})),warnings,files:files.map(f=>({path:f.path,hash:hashBytes(f.bytes),size:f.bytes.length}))};
       // Manifest is promoted last. Downloads additionally require all original assets to verify.

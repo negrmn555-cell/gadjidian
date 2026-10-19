@@ -138,7 +138,7 @@ test('failed publish keeps the local commit and a later push marks the operation
   await assert.rejects(f.sync.push());
   assert.equal(f.sync.getStatus().pending, true);
   assert.equal(f.db.getOperation('publish-retry-operation')!.state, 'committed');
-  assert.equal((await f.tasks.get(created.task.id)).title, taskInput.title);
+  assert.equal((await f.tasks.get(created.task.id)).title, created.task.title);
   await run('git', ['remote', 'set-url', 'origin', remote], { cwd: f.cfg.vault.root });
   await f.sync.push();
   assert.equal(f.sync.getStatus().pending, false);

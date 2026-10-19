@@ -3,7 +3,7 @@ export function InstallGate() {
   return (
     <div className="screen">
       <div className="center">
-        <h1>Установите приложение</h1>
+        <h1>Установите gadjidian</h1>
         <p className="muted">
           Из обычной вкладки браузера вход закрыт: код подключения — ключ от ваших заметок, а вкладку легко потерять. Добавьте страницу
           на домашний экран и открывайте с иконки.

@@ -8,7 +8,7 @@ import { promisify } from 'node:util';
 import { DatabaseSync } from 'node:sqlite';
 import { createCanvas } from '@napi-rs/canvas';
 import { zipSync, strToU8 } from 'fflate';
-import { Vault, LlmClient, Agent, hashContent, sourceVersion, DomainError, type NoteCreateInput, type ExtractionReport } from '@relay/core';
+import { Vault, LlmClient, Agent, hashContent, parseFrontmatter, sourceVersion, DomainError, type NoteCreateInput, type ExtractionReport } from '@relay/core';
 import { Db } from '../src/db.js';
 import { loadConfig } from '../src/config.js';
 import { GitSync } from '../src/sync.js';
@@ -69,7 +69,7 @@ test('full import preserves all long text, original/manifest and Git commit; rep
   const f=await fixture(t,true),chat=f.db.chats.create(1,'import-chat-entry','UTC'),bytes=Buffer.from('Начало\n'+('Большой документ.\n'.repeat(8000))+'КОНЕЦ');const a=await upload(f.db.chats,1,chat.id,'long.txt',bytes);
   const note={title:'Документ',category:'study'},r=await f.imports.import(1,chat.id,a.id,note,'import-full-request');assert.equal(r.status,'complete');assert.equal(r.receipt.state,'committed');assert.equal((await f.imports.original(r.assetId)).bytes.equals(bytes),true);assert.match((await f.notes.get(r.notePath)).body,/КОНЕЦ/);
   const manifest=JSON.parse(await fs.readFile(f.vault.resolve(r.manifestPath),'utf8'));assert.equal(manifest.originalHash,hashBytes(bytes));assert.equal(manifest.pages[0].characters,bytes.toString().length);
-  const committed=(await exec('git',['show','--format=','--name-only','HEAD'],{cwd:f.vault.root})).stdout;for(const p of [r.originalPath,r.notePath,r.manifestPath])assert.ok(committed.includes(p));
+  const committed=(await exec('git',['show','--format=','--name-only','-z','HEAD'],{cwd:f.vault.root})).stdout.split('\0');for(const p of [r.originalPath,r.notePath,r.manifestPath])assert.ok(committed.includes(p));
   assert.equal((await f.imports.import(1,chat.id,a.id,note,'import-full-request')).assetId,r.assetId);await assert.rejects(f.imports.import(1,chat.id,a.id,{...note,title:'Other'},'import-full-request'),/другого импорта/);
   f.db.chats.clear(1,chat.id);assert.equal((await f.imports.original(r.assetId)).bytes.equals(bytes),true);assert.equal((await f.imports.import(1,chat.id,a.id,note,'import-full-request')).notePath,r.notePath);
   const b=await upload(f.db.chats,1,chat.id,'other-name.txt',bytes);assert.equal((await f.imports.import(1,chat.id,b.id,note,'import-full-duplicate')).assetId,r.assetId);assert.equal((await f.notes.list()).items.length,1);
@@ -130,8 +130,15 @@ test('deleting a covered message invalidates summary, without trusting a survivi
 test('authenticated notes/import/memory APIs work together and original download survives history deletion',async t=>{
   const f=await fixture(t),paired=f.db.createDevice('stage4','app'),quick=f.db.createDevice('quick','quick');const app=await createServer(f.cfg);f.beforeCleanup.push(()=>app.close());const h={authorization:'Bearer '+paired.token},c=(await app.inject({method:'POST',url:'/api/chats',headers:h,payload:{entryId:'api-stage4-entry',timezone:'UTC'}})).json();
   assert.equal((await app.inject({method:'GET',url:'/api/notes',headers:{authorization:'Bearer '+quick.token}})).statusCode,401);
-  const note=(await app.inject({method:'POST',url:'/api/notes',headers:h,payload:{operationId:'api-note-create',note:fields}})).json();assert.equal(note.note.title,'Анна');
+  const note=(await app.inject({method:'POST',url:'/api/notes',headers:h,payload:{operationId:'api-note-create',note:fields}})).json();assert.match(note.note.title,/^Анна #[A-Z0-9]{4,8}$/);
   const saved=await app.inject({method:'PATCH',url:'/api/notes/document',headers:h,payload:{operationId:'api-note-update',path:note.note.path,expectedContentHash:note.note.contentHash,edit:{fields:{...fields,body:'Edited'}}}});assert.equal(saved.statusCode,200);
+  const graph=await app.inject({method:'GET',url:'/api/notes/graph',headers:h});assert.equal(graph.statusCode,200);assert.ok(graph.json().nodes.some((n:{path:string})=>n.path===note.note.path));
+  assert.equal((await app.inject({method:'GET',url:'/api/notes/graph'})).statusCode,401);
+  const graphDoc=await app.inject({method:'GET',url:'/api/notes/graph/document?path='+encodeURIComponent(note.note.path),headers:h});assert.equal(graphDoc.statusCode,200);assert.match(graphDoc.json().body,/Edited/);
+  await fs.writeFile(path.join(f.vault.root,'Broken.md'),'---\na: 1\na: 2\n---\nСохранённый текст');const broken=await app.inject({method:'GET',url:'/api/notes/graph/document?path=Broken.md',headers:h});assert.equal(broken.statusCode,200);assert.match(broken.json().body,/Сохранённый текст/);
+  for(const target of ['../escape.md','Private/secret.md','.git/config'])assert.notEqual((await app.inject({method:'GET',url:'/api/notes/graph/document?path='+encodeURIComponent(target),headers:h})).statusCode,200);
+  const retention=await app.inject({method:'GET',url:'/api/completed-events',headers:h});assert.equal(retention.statusCode,200);assert.equal(retention.json().retentionDays,14);assert.equal(retention.json().providerConfigured,false);
+  const capture=await app.inject({method:'POST',url:'/api/send',headers:{authorization:'Bearer '+quick.token},payload:{text:'Быстрая запись\nТекст виджета'}});assert.equal(capture.statusCode,200);assert.match(parseFrontmatter((await f.vault.readNote(capture.json().path)).content).metadata.title as string,/^Быстрая запись #[A-Z0-9]{4,8}$/);
   const bytes=Buffer.from('Import this text.');const uploadRes=await app.inject({method:'POST',url:'/api/attachments?chatId='+c.id+'&name=test.txt',headers:{...h,'content-type':'application/octet-stream'},payload:bytes});assert.equal(uploadRes.statusCode,201);const file=uploadRes.json();
   const imported=await app.inject({method:'POST',url:'/api/attachments/'+file.id+'/import',headers:h,payload:{chatId:c.id,note:{title:'Imported',category:'personal'},operationId:'api-import-request'}});assert.equal(imported.statusCode,200);const asset=imported.json();
   await app.inject({method:'POST',url:'/api/chat',headers:h,payload:{chatId:c.id,expectedVersion:c.version,requestId:'api-summary-message',text:'/quick Remember this',attachmentIds:[]}});

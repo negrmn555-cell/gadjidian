@@ -11,7 +11,7 @@ import path from 'node:path';
 import { promises as fs } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { monitorEventLoopDelay } from 'node:perf_hooks';
-import { LlmClient, Vault, DomainError, objectInput, createNote, appendToDaily, getSearchIndex, disposeSearch, measureRun, measure, recordDuration, recordFirstText } from '@relay/core';
+import { LlmClient, Vault, DomainError, objectInput, appendToDaily, getSearchIndex, disposeSearch, measureRun, measure, recordDuration, recordFirstText } from '@relay/core';
 import type { AgentEvent, AgentResult } from '@relay/core';
 import { loadConfig, loadScenarios, type ServerConfig } from './config.js';
 import { Db } from './db.js';
@@ -25,6 +25,8 @@ import { ChatModeService } from './chat-modes.js';
 import { attachmentContext, attachmentTool } from './agent-context.js';
 import { MAX_UPLOAD, upload } from './attachments.js';
 import { NoteService } from './notes.js';
+import { notesGraph } from './notes-graph.js';
+import { isPreferencesPath, parseMarkdownDocument } from '@relay/core';
 import { ImportService } from './imports.js';
 import { ChatMemoryService } from './chat-memory.js';
 import { VaultError, sourceVersion } from '@relay/core';
@@ -35,6 +37,7 @@ import { WsTickets } from './ws-tickets.js';
 import { NoteIndex } from './note-index.js';
 import { Scheduler, AutomationSettingsService } from './scheduler.js';
 import { OrganizerService } from './organizer.js';
+import { CompletedEvents, EVENTS_BASE, RETENTION_DAYS } from './completed-events.js';
 import { NotificationService } from './notifications.js';
 import { RequestLedger } from './request-ledger.js';
 import { ExtractionJobs } from './extraction-jobs.js';
@@ -83,12 +86,17 @@ async function createUnlockedServer(cfg:ServerConfig) {
   const modes = new ChatModeService(db.chats, tasks, notes, vault);
   const automationSettings=new AutomationSettingsService(db),tickets=new WsTickets();
   const organizer=new OrganizerService(vault,db,index,providers,sync,mutations,automationSettings);
+  const completedEvents=new CompletedEvents(vault,tasks,providers,mutations,sync,automationSettings);
   const notifications=await NotificationService.open(db,cfg,automationSettings,tasks,sync);
   const ledger=new RequestLedger(db);
   const extractionJobs=new ExtractionJobs(db.chats,device=>db.listDevices().some(d=>d.id===device));
   const documentJobs=new DocumentJobs(db.chats,providers,device=>db.listDevices().some(d=>d.id===device));
   const summaryJobs=new SummaryJobs(db.chats,memory,providers,device=>db.listDevices().some(d=>d.id===device));
-  const scheduler:Scheduler=new Scheduler(db,automationSettings,{document:lease=>documentJobs.run(lease),summarize:lease=>summaryJobs.run(lease,scheduler),extract:lease=>extractionJobs.run(lease),organize:async lease=>{
+  const scheduler:Scheduler=new Scheduler(db,automationSettings,{archive_completed:async lease=>{
+    const result=await completedEvents.run(lease) as {remaining:number};
+    if(result.remaining>0)scheduler.enqueue('archive_completed','archive-continuation:'+lease.job.id,Date.now()+1000,automationSettings.get().version);
+    return result;
+  },document:lease=>documentJobs.run(lease),summarize:lease=>summaryJobs.run(lease,scheduler),extract:lease=>extractionJobs.run(lease),organize:async lease=>{
     const result=await organizer.run(lease) as {remaining:number};
     if(result.remaining>0){const row=db.sql.prepare('SELECT plan_json FROM organizer_runs WHERE id=?').get('plan_'+lease.job.id) as {plan_json:string};const preview=JSON.parse(row.plan_json);if(!preview.plan.deferredPaths.length)scheduler.enqueue('organize','continuation:'+lease.job.id,Date.now()+1000,lease.job.settingsVersion,{continuation:true});}
     return result;
@@ -167,7 +175,7 @@ async function createUnlockedServer(cfg:ServerConfig) {
         pathOut = await appendToDaily(vault, text);
       } else {
         const title = String(req.body?.title ?? text.split('\n')[0].slice(0, 60));
-        pathOut = await createNote(vault, { title, content: text, folder: device.folder ?? undefined });
+        pathOut = (await noteEditor.capture(text,title,device.folder ?? vault.config.inboxFolder ?? '',crypto.randomUUID())).path;
       }
       sync.schedulePush();
       db.addMessage(device.id, 'quick', 'user', text, { path: pathOut });
@@ -197,6 +205,16 @@ async function createUnlockedServer(cfg:ServerConfig) {
   app.get('/api/chats', {preHandler:auth},async req=>({items:db.chats.sessions(req.device!.id)}));
   app.get('/api/search/status',{preHandler:auth},async()=>indexCoordinator.status());
   app.get<{Querystring:{q?:string}}>('/api/notes',{preHandler:auth},async req=>noteEditor.list(String(req.query.q??'').slice(0,200)));
+  app.get('/api/notes/graph',{preHandler:auth},async()=>{
+    await sync.pull();
+    return notesGraph(vault,await sync.head(),sync.mode);
+  });
+  app.get<{Querystring:{path?:string}}>('/api/notes/graph/document',{preHandler:auth},async req=>{
+    const target=String(req.query.path??'');
+    if(isPreferencesPath(target))throw new DomainError('PREFERENCES_PROTECTED','Эта заметка доступна в настройках памяти.',403);
+    const note=await vault.readNote(target),parsed=parseMarkdownDocument(note.path,note.content);
+    return {path:note.path,title:parsed.title,body:parsed.body};
+  });
   app.get<{Querystring:{path?:string}}>('/api/notes/document',{preHandler:auth},async req=>noteEditor.get(String(req.query.path??'')));
   app.get<{Querystring:{target?:string;from?:string}}>('/api/notes/resolve',{preHandler:auth},async req=>{const target=String(req.query.target??''),from=String(req.query.from??'');if(!target||target.length>1000||/[\[\]\r\n]/.test(target))throw new DomainError('VALIDATION_ERROR','Некорректная ссылка.');if(from)await vault.safePath(from);const link=vaultLinks('[['+target+']]')[0];if(!link)throw new DomainError('VALIDATION_ERROR','Некорректная ссылка.');const paths=(await vault.listNotes()).map(n=>n.path),r=resolveVaultLink(link,from,paths);return {paths:r.path?[r.path]:r.ambiguous?paths.filter(p=>p.split('/').pop()!.replace(/\.md$/i,'')===link.target.split('/').pop()!.replace(/\.md$/i,'')):[],anchor:link.anchor??null};});
   app.post('/api/notes',{preHandler:auth},async(req,reply)=>{const b=objectInput(req.body);return reply.code(201).send(await noteEditor.create(b.note,String(b.operationId??'')));});
@@ -346,6 +364,8 @@ async function createUnlockedServer(cfg:ServerConfig) {
     await sync.pull().catch(() => {});
     return index.tasks();
   });
+  app.get('/api/completed-events',{preHandler:auth},async()=>({retentionDays:RETENTION_DAYS,eligible:(await completedEvents.eligible()).length,base:EVENTS_BASE,providerConfigured:providers.list().organizerSafety.status==='different' && providers.list().items.some(profile=>profile.slot==='organizer' && profile.enabled),lastJob:scheduler.list().find(job=>job.kind==='archive_completed')??null}));
+  app.post('/api/completed-events',{preHandler:auth},async(req,reply)=>{providers.bindOrganizer().release();return reply.code(202).send(scheduler.enqueue('archive_completed','archive-manual:'+crypto.randomUUID(),Date.now(),automationSettings.get().version));});
   app.get<{ Params: { id: string } }>('/api/tasks/:id', { preHandler: auth }, async req => tasks.get(req.params.id));
   app.get('/api/tasks/legacy',{preHandler:auth},async()=>({items:await tasks.legacy()}));
   app.post('/api/tasks/legacy/convert',{preHandler:auth},async req=>{const b=objectInput(req.body);return tasks.convertLegacy(objectInput(b.source) as unknown as import('@relay/core').LegacyTask,b.task,String(b.operationId??''));});

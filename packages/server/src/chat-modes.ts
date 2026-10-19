@@ -40,7 +40,10 @@ export class ChatModeService {
     if(data.intent==='update'){
       if(Object.keys(data).some(k=>!['intent','targetId','patch','deadlineEvidence'].includes(k)))throw new DomainError('MODEL_OUTPUT_INVALID','Некорректный запрос изменения задачи.');
       const task=editable.find(t=>t.id===data.targetId);
-      if(!task||!input.text.toLocaleLowerCase().includes(task.title.toLocaleLowerCase())&&!input.text.includes(task.id))return {text:'Укажите точное название или ID задачи, которую нужно изменить: '+editable.map(t=>t.title).join('; '),sources:[],actions:[]};
+      const text=input.text.toLocaleLowerCase();
+      const exact=editable.filter(t=>text.includes(t.title.toLocaleLowerCase())||input.text.includes(t.id));
+      const matches=exact.length?exact:editable.filter(t=>text.includes(t.title.replace(/ #[A-Z0-9]{4,8}$/,'').toLocaleLowerCase()));
+      if(!task||matches.length!==1||matches[0].id!==task.id)return {text:'Укажите точное название или ID задачи, которую нужно изменить: '+editable.map(t=>t.title).join('; '),sources:[],actions:[]};
       const patch=objectInput(data.patch);if(patch.deadline)patch.deadline=modelDeadline(patch.deadline,data.deadlineEvidence,input);
       if(input.signal.aborted)throw new DomainError('CANCELLED','Запрос отменён.');
       const saved=await this.tasks.update(task.id,validateTaskPatch(patch),task.contentHash,input.operationId);

@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { ChatSession, ProviderPage } from '@relay/core/contracts';
+import type { ChatSession } from '@relay/core/contracts';
 import { api, ApiError, getToken, isStandalone, setToken } from './api';
 import { Connect } from './screens/Connect';
 import { Chat } from './screens/Chat';
 import { Settings } from './screens/Settings';
 import { InstallGate } from './screens/InstallGate';
 import { Tasks } from './screens/Tasks';
+import { Notes } from './screens/Notes';
 import { Icon } from './Icons';
-import { Notifications } from './screens/AutomationSettings';
+
 import { NoteLink } from './screens/NoteLink';
 import { loadDrafts, saveDraft, clearDrafts } from './browser-state';
 
@@ -15,8 +16,9 @@ const entryId = crypto.randomUUID();
 
 export function App() {
   const [token, setTok] = useState(getToken());
-  const [screen, setScreen] = useState<'chat' | 'settings' | 'notifications'>('chat');
-  const [tab, setTab] = useState<'chat' | 'tasks'>('chat');
+  const [screen, setScreen] = useState<'chat' | 'settings'>('chat');
+  const [tab, setTab] = useState<'chat' | 'tasks' | 'notes'>('chat');
+  const [recordsPulse, setRecordsPulse] = useState(0);
   const [required, setRequired] = useState<boolean | null>(null);
   const [menu, setMenu] = useState(false);
   const [menuClosing, setMenuClosing] = useState(false);
@@ -25,12 +27,9 @@ export function App() {
   const [chat, setChat] = useState<ChatSession | null>(null);
   const [chats, setChats] = useState<ChatSession[]>([]);
   const [error, setError] = useState('');
-  const [providers, setProviders] = useState<ProviderPage | null>(null);
+  const [chatControls, setChatControls] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, string>>(loadDrafts);
   const [noteLink, setNoteLink] = useState<{ target: string; from?: string } | null>(null);
-  const [unread, setUnread] = useState(0);
-  const [editingChat, setEditingChat] = useState<ChatSession | null>(null);
-  const [chatTitle, setChatTitle] = useState('');
   const [shared, setShared] = useState('');
   const drawerRef = useRef<HTMLElement>(null);
   const menuRef = useRef<HTMLButtonElement>(null);
@@ -38,7 +37,6 @@ export function App() {
   const latestList = useRef(0);
   const newEntry = useRef(entryId);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const menuDestination = useRef<'settings' | 'notifications' | null>(null);
   const hadMenu = useRef(false);
 
   const closeMenu = useCallback(() => {
@@ -48,8 +46,6 @@ export function App() {
       setMenu(false);
       setMenuClosing(false);
       closeTimer.current = null;
-      if (menuDestination.current) setScreen(menuDestination.current);
-      menuDestination.current = null;
     };
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) finish();
     else closeTimer.current = setTimeout(finish, 260);
@@ -57,18 +53,14 @@ export function App() {
 
   const openMenu = useCallback(() => {
     if (closeTimer.current) clearTimeout(closeTimer.current);
-    menuDestination.current = null;
     setMenuClosing(false);
     setMenu(true);
   }, []);
 
-  const navigateFromMenu = (destination: 'settings' | 'notifications') => {
-    menuDestination.current = destination;
-    closeMenu();
-  };
   useEffect(() => () => { if (closeTimer.current) clearTimeout(closeTimer.current); }, []);
 
   const unauthorized = useCallback(() => {
+    setChatControls(false);
     setToken(null);
     setTok(null);
     setChat(null);
@@ -76,7 +68,6 @@ export function App() {
     setMenu(false);
     setMenuClosing(false);
     if (closeTimer.current) clearTimeout(closeTimer.current);
-    menuDestination.current = null;
     clearDrafts();
     setDrafts({});
     setNoteLink(null);
@@ -138,7 +129,6 @@ export function App() {
 
   useEffect(() => {
     if (token && screen === 'chat') {
-      api.providers().then(setProviders).catch(report);
       if (chat) api.getChat(chat.id).then(updated).catch(report);
     }
   }, [token, screen, report, updated]);
@@ -158,17 +148,9 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (!token) return;
-    const load = () => api.notifications().then(r => setUnread(r.items.filter(item => !item.read).length)).catch(() => {});
-    void load();
-    const timer = setInterval(() => void load(), 60_000);
-    return () => clearInterval(timer);
-  }, [token, menu, screen]);
-
-  useEffect(() => {
     const note = (event: Event) => setNoteLink((event as CustomEvent).detail);
     const push = (event: MessageEvent) => {
-      if (event.data?.type === 'relay-notification') { if (menu) closeMenu(); setScreen('notifications'); }
+      if (event.data?.type === 'relay-notification') { if (menu) closeMenu(); setScreen('settings'); }
     };
     window.addEventListener('relay-open-note', note);
     navigator.serviceWorker?.addEventListener('message', push);
@@ -181,7 +163,7 @@ export function App() {
       setShared([url.searchParams.get('title'), url.searchParams.get('text'), url.searchParams.get('url')].filter(Boolean).join('\n'));
       history.replaceState(null, '', '/');
     } else if (url.searchParams.get('notification') === '1') {
-      setScreen('notifications');
+      setScreen('settings');
       url.searchParams.delete('notification');
       history.replaceState(null, '', url.pathname + url.search + url.hash);
     }
@@ -239,24 +221,36 @@ export function App() {
   if (!dev && required === null && !isStandalone()) return <div className="screen"><p className="empty" role="status">Подключаюсь к серверу…</p></div>;
   if (!dev && required !== false && !isStandalone()) return <InstallGate />;
   if (!token) return <Connect onConnected={next => { setToken(next); setTok(next); }} />;
-  const selected = providers?.items.find(provider => provider.id === providers.defaultChatProviderId);
-
+  const navigate = (destination: 'chat' | 'tasks' | 'notes' | 'settings') => {
+    setChatControls(false);
+    if (destination === 'settings') setScreen(destination);
+    else { setScreen('chat'); setTab(destination); }
+  };
+  const navigation = (mobile = false) => <nav className={mobile ? 'product-mobile-nav glass' : 'product-nav'} aria-label="Основная навигация">
+    <button className={'product-nav-item ' + (screen === 'chat' && tab === 'chat' ? 'active' : '')} aria-current={screen === 'chat' && tab === 'chat' ? 'page' : undefined} onClick={() => navigate('chat')}><Icon name="chat" /><span>Чат</span></button>
+    <button className={'product-nav-item ' + (screen === 'chat' && tab !== 'chat' ? 'active' : '')} aria-current={screen === 'chat' && tab !== 'chat' ? 'page' : undefined} onClick={() => { setScreen('chat'); setTab('tasks'); }}><Icon name="note" /><span>Записи</span></button>
+    <button className={'product-nav-item ' + (screen === 'settings' ? 'active' : '')} aria-current={screen === 'settings' ? 'page' : undefined} onClick={() => navigate('settings')}><Icon name="settings" /><span>Настройки</span></button>
+  </nav>;
   return <>
+    <div ref={appShellRef} className="product-frame" data-od-id="product-frame">
+      <aside className="product-sidebar glass" data-od-id="product-sidebar"><div className="product-brand"><span className="product-brand-mark">g</span>gadjidian</div>{navigation()}<div className="product-sidebar-foot">Личное пространство</div></aside>
+      <div className="product-workspace">
     {screen === 'settings' && <Settings chatId={chat?.id} onBack={() => setScreen('chat')} onLogout={unauthorized} />}
-    {screen === 'notifications' && <div className="screen"><div className="header"><button className="icon-btn" aria-label="Назад" onClick={() => setScreen('chat')}><Icon name="back" /></button><span className="title">Уведомления</span></div><div className="settings"><Notifications onUnauthorized={unauthorized} /></div></div>}
     {noteLink && <NoteLink {...noteLink} onClose={() => setNoteLink(null)} onUnauthorized={unauthorized} />}
-    <div ref={appShellRef} className="app-shell" hidden={screen !== 'chat'}>
-      <header className="workspace-header" data-od-id="workspace-header">
-        <div className="workspace-toolbar"><button ref={menuRef} className="icon-btn" onClick={openMenu} aria-label="Открыть историю чатов" aria-expanded={menu && !menuClosing}><Icon name="menu" /></button></div>
-        <nav className={'workspace-switch ' + (tab === 'tasks' ? 'tasks-selected' : '')} aria-label="Рабочие области" data-od-id="workspace-switch"><span className="switch-thumb" /><button aria-label="ИИ-чат" aria-pressed={tab === 'chat'} onClick={() => setTab('chat')}><Icon name="chat" /></button><button aria-label="Задачи" aria-pressed={tab === 'tasks'} onClick={() => setTab('tasks')}><Icon name="tasks" /></button></nav>
-        <div className="model-caption" data-od-id="workspace-caption">{tab === 'chat' ? (selected?.name ?? 'ИИ не настроен') : 'Мои задачи'}</div>
-      </header>
-      {error && <div className="app-error" role="alert">{error}</div>}
+    <div className="app-shell" hidden={screen !== 'chat'}>
+      <header className={'workspace-header ' + (tab === 'chat' ? 'chat-header' : 'records-header')} data-od-id="workspace-header">
+        {tab === 'chat' ? <button ref={menuRef} className="icon-btn history-button" onClick={openMenu} aria-label="Открыть историю чатов" aria-expanded={menu && !menuClosing}><Icon name="menu" /></button> : <nav className={'workspace-switch records-switch ' + (tab === 'notes' ? 'tasks-selected' : '')} aria-label="Тип записей">{recordsPulse > 0 && <span key={recordsPulse} className="records-switch-glow" aria-hidden="true" />}<span className="switch-thumb" aria-hidden="true" /><button aria-pressed={tab === 'tasks'} onClick={() => { setTab('tasks'); setRecordsPulse(value => value + 1); }}><Icon name="tasks" /><span>Задачи</span></button><button aria-pressed={tab === 'notes'} onClick={() => { setTab('notes'); setRecordsPulse(value => value + 1); }}><Icon name="note" /><span>Заметки</span></button></nav>}
+        {tab === 'chat' && <button className="chat-controls-button glass" aria-label="Чат: модель и память" aria-haspopup="dialog" aria-expanded={chatControls} onClick={() => setChatControls(value => !value)}>Чат<Icon name="chevron" /></button>}
+      </header>      {error && <div className="app-error" role="alert">{error}</div>}
       <div className="app-content">
-        <div className="app-panel" hidden={tab !== 'chat'}>{chat ? <Chat key={chat.id} chat={chat} draft={drafts[chat.id] ?? (chat.messageCount === 0 ? shared : '')} onDraft={text => { saveDraft(chat.id, text, chat.expiresAt); setDrafts(old => ({ ...old, [chat.id]: text })); setShared(''); }} onUpdated={updated} onUnauthorized={unauthorized} onBusy={setBusy} /> : <div className="empty"><p>{starting ? 'Открываю новый чат…' : 'Не удалось открыть чат.'}</p>{!starting && <button className="btn" onClick={() => void makeChat(false)}>Повторить</button>}</div>}</div>
-        <div className="app-panel" hidden={tab !== 'tasks'}><Tasks onSettings={() => { if (menu) closeMenu(); setScreen('settings'); }} onUnauthorized={unauthorized} addTaskSignal={0} /></div>
+        <div className="app-panel" hidden={tab !== 'chat'}>{chat ? <Chat key={chat.id} chat={chat} controlsOpen={chatControls && tab === 'chat' && screen === 'chat'} onCloseControls={() => setChatControls(false)} draft={drafts[chat.id] ?? (chat.messageCount === 0 ? shared : '')} onDraft={text => { saveDraft(chat.id, text, chat.expiresAt); setDrafts(old => ({ ...old, [chat.id]: text })); setShared(''); }} onUpdated={updated} onUnauthorized={unauthorized} onBusy={setBusy} /> : <div className="empty"><p>{starting ? 'Открываю новый чат…' : 'Не удалось открыть чат.'}</p>{!starting && <button className="btn" onClick={() => void makeChat(false)}>Повторить</button>}</div>}</div>
+        <div className="app-panel" hidden={tab !== 'tasks'}><Tasks onSettings={() => navigate('settings')} onUnauthorized={unauthorized} addTaskSignal={0} /></div>
+        <div className="app-panel" hidden={tab !== 'notes'}><Notes onBack={() => navigate('tasks')} onUnauthorized={unauthorized} /></div>
       </div>
     </div>
-    {menu && screen === 'chat' && <div className={'drawer-layer ' + (menuClosing ? 'is-closing' : '')} data-od-id="drawer-layer"><button className="drawer-backdrop" tabIndex={-1} aria-label="Закрыть историю чатов" onClick={closeMenu} /><aside ref={drawerRef} className="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title"><div className="drawer-heading"><h2 id="drawer-title">История чатов</h2><button className="icon-btn" aria-label="Закрыть историю чатов" onClick={closeMenu}><Icon name="close" /></button></div><button className="drawer-link new-chat" disabled={busy || starting} onClick={() => void makeChat()}><Icon name="plus" />Новый чат</button><p className="muted history-caption">История хранится 14 дней</p>{chats.filter(item => item.messageCount > 0 || item.id === chat?.id).map(item => <button key={item.id} className={'chat-choice ' + (item.id === chat?.id ? 'active' : '')} disabled={busy || starting} aria-current={item.id === chat?.id ? 'true' : undefined} onClick={() => void openChat(item)}><strong>{item.title}</strong><small>{new Date(item.updatedAt).toLocaleDateString('ru-RU')} · {item.mode === 'task' ? 'Задача' : 'Заметка'}{item.pendingTask ? ' · ждёт срока' : ''}</small></button>)}{!chats.some(item => item.messageCount > 0) && <p className="muted history-caption">Здесь появятся ваши разговоры</p>}{chat && <button className="drawer-link" disabled={busy || starting} onClick={() => { setEditingChat(chat); setChatTitle(chat.title); }}>Название / удалить текущий чат</button>}{editingChat && <form onSubmit={event => { event.preventDefault(); void api.renameChat(editingChat, chatTitle).then(next => { updated(next); setEditingChat(null); void reloadChats(); }).catch(report); }}><label>Название чата<input className="field" maxLength={80} required value={chatTitle} onChange={event => setChatTitle(event.target.value)} /></label><button className="btn small">Сохранить название</button><button type="button" className="btn secondary small" onClick={() => { if (confirm('Удалить историю этого чата? Задачи и заметки сохранятся.')) void api.removeChat(editingChat).then(async () => { saveDraft(editingChat.id, '', 0); setDrafts(old => { const next = { ...old }; delete next[editingChat.id]; return next; }); setEditingChat(null); if (chat?.id === editingChat.id) await makeChat(); else await reloadChats(); }).catch(report); }}>Удалить историю чата</button><button type="button" className="btn secondary small" onClick={() => setEditingChat(null)}>Отмена</button></form>}<button className="drawer-link" onClick={() => { navigateFromMenu('notifications'); }}>Уведомления{unread ? ' · ' + unread : ''}</button><button className="drawer-link drawer-settings" onClick={() => { navigateFromMenu('settings'); }}><Icon name="settings" />Настройки</button></aside></div>}
+      </div>
+      {navigation(true)}
+    </div>
+    {menu && screen === 'chat' && <div className={'drawer-layer ' + (menuClosing ? 'is-closing' : '')}><button className="drawer-backdrop" tabIndex={-1} aria-label="Закрыть историю чатов" onClick={closeMenu} /><aside ref={drawerRef} className="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title"><div className="drawer-heading"><h2 id="drawer-title" className="sr-only">История чатов</h2><button className="icon-btn" aria-label="Закрыть историю чатов" onClick={closeMenu}><Icon name="close" /></button></div><button className="drawer-link new-chat" disabled={busy || starting} onClick={() => void makeChat()}><Icon name="plus" />Новый чат</button>{chats.filter(item => item.messageCount > 0 || item.id === chat?.id).map(item => <button key={item.id} className={'chat-choice ' + (item.id === chat?.id ? 'active' : '')} disabled={busy || starting} aria-current={item.id === chat?.id ? 'true' : undefined} onClick={() => void openChat(item)}><strong>{item.title}</strong><small>{new Date(item.updatedAt).toLocaleDateString('ru-RU')}</small></button>)}</aside></div>}
   </>;
 }

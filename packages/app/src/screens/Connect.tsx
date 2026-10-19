@@ -24,9 +24,9 @@ export function Connect({ onConnected }: { onConnected: (token: string) => void 
   return (
     <div className="screen">
       <form className="center" onSubmit={submit}>
-        <h1>Подключение</h1>
+        <h1>Подключение к gadjidian</h1>
         <p className="muted">
-          Введите код подключения, который выдал сервер (команда <code>relay code</code> или экран «Настройки» на уже подключённом телефоне).
+          Введите код подключения, который выдал сервер (серверная консоль или экран «Настройки» на уже подключённом телефоне).
           Код одноразовый — после входа телефон получит собственный ключ.
         </p>
         <input

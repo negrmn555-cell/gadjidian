@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
-import { DomainError, createTaskDocument, updateTaskDocument, readTaskDocument, hashContent, searchNotes, sourceVersion, vaultLinks, validateTaskCreate, validateTaskPatch, getSearchIndex, type TaskCreateInput, type LegacyTask, type Task, type TaskPage, type TaskWriteResult, type Vault } from '@relay/core';
+import { DomainError, createTaskDocument, updateTaskDocument, readTaskDocument, hashContent, searchNotes, sourceVersion, vaultLinks, validateTaskCreate, validateTaskPatch, getSearchIndex, sanitizeFileName, type TaskCreateInput, type LegacyTask, type Task, type TaskPage, type TaskWriteResult, type Vault } from '@relay/core';
 import type { VaultMutationService } from './vault-mutations.js';
 import {noteKeywords} from './notes.js';
+import { allocateRecordTitle, codedTitle, recordCode, recordFileName } from './record-codes.js';
 
 const folders = { study: 'Study', work: 'Work', personal: 'Personal' };
 
@@ -37,6 +38,7 @@ export class TaskService {
   async legacy(): Promise<LegacyTask[]> {
     const out:LegacyTask[]=[];
     for(const meta of await this.vault.listNotes()) {
+      if(meta.path.startsWith('Archive/Completed/'))continue;
       const content=(await this.vault.readNote(meta.path)).content;
       try { if(readTaskDocument(content,meta.path))continue; } catch { continue; }
       let fence=false;
@@ -60,7 +62,7 @@ export class TaskService {
       const lines=content.split(/\r?\n/),m=/^(\s*[-*]\s+)\[([ xX])\]\s+(.+)$/.exec(lines[source.line]??'');
       if(lines.slice(0,source.line).filter(l=>/^\s*(```|~~~)/.test(l)).length%2)throw new DomainError('INVALID_LEGACY','Блок кода не является задачей.');
       if(!m||m[3].slice(0,200)!==source.title||lines[source.line].includes('<!-- relay-task:'))throw new DomainError('VERSION_CONFLICT','Старая задача изменилась.',409);
-      let created=createTaskDocument(task,id,this.now());
+      let created=createTaskDocument({...task,title:await allocateRecordTitle(this.vault,task.title)},id,this.now());
       if(m[2]!==' ')created=updateTaskDocument(created,target,{status:'done'},this.now());
       lines[source.line]=m[1]+'['+m[2]+'] '+m[3]+' <!-- relay-task:'+id+' --> [['+target.replace(/\.md$/,'')+'|Задача]]';
       return {files:[{path:target,bytes:Buffer.from(created),baseHash:null},{path:source.path,bytes:Buffer.from(lines.join(content.includes('\r\n')?'\r\n':'\n')),baseHash:source.contentHash}],result:{id}};
@@ -73,9 +75,9 @@ export class TaskService {
     const id = 'task_' + createHash('sha256').update(operationId).digest('hex').slice(0, 32);
     const receipt = await this.mutations.mutate({
       operationId, request: { kind: 'task-create', input },
-      prepare: async () => { if(signal?.aborted)throw new DomainError('CANCELLED','Запрос отменён.');const enriched=await this.enrich(input);if(signal?.aborted)throw new DomainError('CANCELLED','Запрос отменён.');return ({
-        path: 'Areas/' + folders[input.category] + '/Tasks/' + id + '.md',
-        content: createTaskDocument(enriched, id, this.now()), baseHash: null,
+      prepare: async () => { if(signal?.aborted)throw new DomainError('CANCELLED','Запрос отменён.');const enriched=await this.enrich(input);const title=await allocateRecordTitle(this.vault,enriched.title);if(signal?.aborted)throw new DomainError('CANCELLED','Запрос отменён.');return ({
+        path: 'Areas/' + folders[input.category] + '/Tasks/' + recordFileName(title) + '.md',
+        content: createTaskDocument({...enriched,title}, id, this.now()), baseHash: null,
       });},
     });
     return { task: await this.get(id), receipt };
@@ -83,7 +85,7 @@ export class TaskService {
   async createMany(values:unknown[],operationId:string,signal?:AbortSignal):Promise<TaskWriteResult[]>{
     if(!values.length||values.length>10)throw new DomainError('TASK_LIMIT','За один запрос можно добавить от одной до десяти задач.');
     const inputs=values.map(validateTaskCreate),ids=inputs.map((_,i)=>'task_'+createHash('sha256').update(operationId+':'+i).digest('hex').slice(0,32));
-    const result=await this.mutations.mutateBatch({operationId,request:{kind:'task-create-many',inputs},prepare:async()=>{if(signal?.aborted)throw new DomainError('CANCELLED','Запрос отменён.');const enriched=await Promise.all(inputs.map(input=>this.enrich(input)));if(signal?.aborted)throw new DomainError('CANCELLED','Запрос отменён.');return {files:enriched.map((input,i)=>({path:'Areas/'+folders[input.category]+'/Tasks/'+ids[i]+'.md',baseHash:null,bytes:Buffer.from(createTaskDocument(input,ids[i],this.now()))})),result:{ids}};}});
+    const result=await this.mutations.mutateBatch({operationId,request:{kind:'task-create-many',inputs},prepare:async()=>{if(signal?.aborted)throw new DomainError('CANCELLED','Запрос отменён.');const reserved=new Set<string>();const enriched=[];for(const input of inputs){const next=await this.enrich(input);enriched.push({...next,title:await allocateRecordTitle(this.vault,next.title,reserved)});}if(signal?.aborted)throw new DomainError('CANCELLED','Запрос отменён.');return {files:enriched.map((input,i)=>({path:'Areas/'+folders[input.category]+'/Tasks/'+recordFileName(input.title)+'.md',baseHash:null,bytes:Buffer.from(createTaskDocument(input,ids[i],this.now()))})),result:{ids}};}});
     return Promise.all(ids.map(async id=>({task:await this.get(id),receipt:result.receipt})));
   }
 
@@ -96,7 +98,9 @@ export class TaskService {
         const task = await this.get(id);
         if (task.contentHash !== expectedHash) throw new DomainError('VERSION_CONFLICT', 'Задача изменилась. Обновите список.', 409);
         const note = await this.vault.readNote(task.path);
-        return { path: task.path, content: updateTaskDocument(note.content, task.path, patch, this.now()), baseHash: expectedHash };
+        const code=recordCode(task.title);
+        const next=code && patch.title ? {...patch,title:codedTitle(patch.title,code)} : patch;
+        return { path: task.path, content: updateTaskDocument(note.content, task.path, next, this.now()), baseHash: expectedHash };
       },
     });
     return { task: await this.get(id), receipt };

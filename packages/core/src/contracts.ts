@@ -12,6 +12,13 @@ export type NoteKind = 'quick' | 'idea' | 'person';
 export interface NoteCreateInput { title: string; body: string; kind: NoteKind; category: Category; tags: string[]; keywords: string[]; aliases: string[]; person: { phone: string; email: string; role: string } }
 export interface NoteRecord extends NoteCreateInput { id: string | null; path: string; content: string; contentHash: string; updatedAt: number }
 export interface NotePage { items: Omit<NoteRecord, 'content' | 'body'>[]; invalidRecords: {path: string; error: string}[] }
+export interface NoteGraph {
+  nodes: { path: string; title: string; kind: string; id: string | null }[];
+  edges: { source: string; target: string }[];
+  revision: string | null;
+  syncMode: string;
+  warnings: string[];
+}
 export interface NoteEditInput { fields?: NoteCreateInput; content?: string }
 export interface NoteWriteResult { note: NoteRecord; receipt: MutationReceipt }
 export interface PageInterpretation {text:string;providerId:string;providerVersion:number;model:string;route:'native_pdf'|'page_images';settingsHash:string;warnings:string[]}
@@ -276,7 +283,7 @@ export interface AutomationSettings {
   digest:{enabled:boolean;timezone:string;weekday:number;localTime:string;maxItems:number;includeOverdue:boolean};
 }
 export type JobState='queued'|'running'|'succeeded'|'failed'|'cancelled'|'unknown';
-export interface ScheduledJob {id:string;kind:'organize'|'weekly_digest'|'extract'|'summarize'|'document';dedupeKey:string;scheduledFor:number;settingsVersion:number;state:JobState;attempt:number;leaseUntil:number|null;fencingToken:number;lastError:string|null;result:unknown}
+export interface ScheduledJob {id:string;kind:'organize'|'weekly_digest'|'extract'|'summarize'|'document'|'archive_completed';dedupeKey:string;scheduledFor:number;settingsVersion:number;state:JobState;attempt:number;leaseUntil:number|null;fencingToken:number;lastError:string|null;result:unknown}
 export interface OrganizationPatch {path:string;baseHash:string;targetPath?:string;addTags:string[];keywords?:string[];relatedPaths:string[];rationale:string}
 export interface OrganizationPlan {id:string;inputHead:string|null;policyVersion:number;settingsVersion:number;provider?:{id:string;version:number};patches:OrganizationPatch[];deferredPaths:string[];affectedPaths:string[];inputHashes:Record<string,string>;createdAt:number}
 export interface OrganizationPreview {plan:OrganizationPlan;files:{path:string;before:string;after:string;moveFrom?:string}[];remaining:number;warnings:string[]}

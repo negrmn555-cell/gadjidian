@@ -7,10 +7,10 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['icon.svg','push-events.js'],
+      includeAssets: ['icon.svg','push-events.js','fonts/Manrope.ttf'],
       manifest: {
-        name: 'Obsidian Relay',
-        short_name: 'Relay',
+        name: 'gadjidian',
+        short_name: 'gadjidian',
         description: 'Ваше хранилище Obsidian — из любого браузера',
         lang: 'ru',
         display: 'standalone',

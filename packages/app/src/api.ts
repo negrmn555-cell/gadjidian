@@ -83,6 +83,10 @@ async function req<T>(method: string, path: string, body?: unknown, raw?: { data
 }
 
 export const api = {
+  completedEvents: () => req<{retentionDays:number;eligible:number;base:string;providerConfigured:boolean;lastJob:import('@relay/core/contracts').ScheduledJob|null}>('GET','/api/completed-events'),
+  processCompleted: () => req<import('@relay/core/contracts').ScheduledJob>('POST','/api/completed-events',{}),
+  noteGraph: () => req<import('@relay/core/contracts').NoteGraph>('GET','/api/notes/graph'),
+  graphDocument: (path:string) => req<{path:string;title:string;body:string}>('GET','/api/notes/graph/document?path='+encodeURIComponent(path)),
   diagnostics:()=>req<DiagnosticsStatus>('GET','/api/diagnostics'),
   mcpKeys:()=>req<{enabled:boolean;url:string;keys:McpKey[]}>('GET','/api/mcp/keys'),
   createMcpKey:(name:string,days:number)=>req<{key:McpKey;token:string;url:string}>('POST','/api/mcp/keys',{name,days}),

@@ -5,6 +5,7 @@ import { Icon } from '../Icons';
 import { AutomationSettings,Notifications } from './AutomationSettings';
 import { GitConflicts } from './GitConflicts';
 import { AgentIntegrations } from './AgentIntegrations';
+import { CompletedEventsSettings } from './CompletedEventsSettings';
 
 export function Settings({ onBack, onLogout, chatId }: { onBack: () => void; onLogout: () => void; chatId?:string }) {
   const [me, setMe] = useState<Awaited<ReturnType<typeof api.me>> | null>(null);
@@ -37,6 +38,7 @@ export function Settings({ onBack, onLogout, chatId }: { onBack: () => void; onL
       <div className="settings">
         {err && <div className="error">{err}</div>}
         <ProviderSettings onUnauthorized={onLogout} />
+        <CompletedEventsSettings onUnauthorized={onLogout} />
         <AutomationSettings onUnauthorized={onLogout}/>
         <Notifications onUnauthorized={onLogout}/>
         <GitConflicts onUnauthorized={onLogout}/>

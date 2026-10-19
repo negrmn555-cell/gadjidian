@@ -3,6 +3,7 @@ import { categoryLabels, type NoteCreateInput, type NoteRecord, type NotePage } 
 import { api, ApiError } from '../api';
 import { Icon } from '../Icons';
 import { Markdown } from '../Markdown';
+import { NoteGraph } from './NoteGraph';
 const blank:NoteCreateInput={title:'',body:'',kind:'quick',category:'personal',tags:[],keywords:[],aliases:[],person:{phone:'',email:'',role:''}};
 const labels={quick:'Заметка',idea:'Идея',person:'Человек'};
 function fields(n:NoteRecord):NoteCreateInput {return {title:n.title,body:n.body,kind:n.kind,category:n.category,tags:n.tags,keywords:n.keywords,aliases:n.aliases,person:n.person};}
@@ -43,18 +44,21 @@ export function NoteEditor({path,onClose,onSaved,onUnauthorized}:{path:string|nu
   </section>;
 }
 export function Notes({onBack,onUnauthorized,startNew=false}:{onBack:()=>void;onUnauthorized:()=>void;startNew?:boolean}){
+  const [view,setView]=useState<'list'|'graph'>('list');
   const [page,setPage]=useState<NotePage>({items:[],invalidRecords:[]}),[q,setQ]=useState(''),[kind,setKind]=useState('all'),[editor,setEditor]=useState<string|null|undefined>(startNew?null:undefined),[loading,setLoading]=useState(false),[error,setError]=useState('');
   const generation=useRef(0);
   const reload=async()=>{const current=++generation.current;setLoading(true);try{const result=await api.notes(q);if(current===generation.current){setPage(result);setError('');}}catch(e){if(current===generation.current)setError((e as Error).message);if(e instanceof ApiError&&e.status===401)onUnauthorized();}finally{if(current===generation.current)setLoading(false);}};
   useEffect(()=>()=>{generation.current++;},[]);
   useEffect(()=>{const timer=setTimeout(()=>void reload(),250);return()=>clearTimeout(timer);},[q]);
   return <div className="screen"><div className="tasks-content notes-content">{editor!==undefined?<NoteEditor key={editor??'new'} path={editor} onClose={()=>setEditor(undefined)} onSaved={()=>void reload()} onUnauthorized={onUnauthorized}/>:<>
-    <div className="editor-heading"><h2>Заметки и люди</h2><button className="btn secondary small" onClick={onBack}>К задачам</button></div>
+    <div className="editor-heading"><h2>Заметки</h2><div className="view-tabs" role="group" aria-label="Вид заметок"><button aria-pressed={view==='list'} onClick={()=>setView('list')}>Список</button><button aria-pressed={view==='graph'} onClick={()=>setView('graph')}>Граф</button></div></div>
+    {view==='graph'?<NoteGraph onUnauthorized={onUnauthorized}/>:<>
     <div className="task-toolbar"><button className="btn small" onClick={()=>setEditor(null)}>Добавить заметку</button><button className="btn secondary small" disabled={loading} onClick={()=>void reload()}>Обновить</button></div>
     <label>Поиск<input className="field" placeholder="Название, имя, метка…" value={q} onChange={e=>setQ(e.target.value)}/></label><label>Тип<select className="field" value={kind} onChange={e=>setKind(e.target.value)}><option value="all">Все</option>{Object.entries(labels).map(([k,v])=><option value={k} key={k}>{v}</option>)}</select></label>
     {error&&<p className="error" role="alert">{error}</p>}{loading&&<p role="status">Загружаю…</p>}
     {!loading&&!page.items.length&&<p className="muted">Здесь появятся заметки и карточки людей из Obsidian.</p>}
     {page.items.filter(n=>kind==='all'||n.kind===kind).map(n=><button className="card note-choice" key={n.path} onClick={()=>setEditor(n.path)}><strong>{n.title}</strong><span>{labels[n.kind]} · {categoryLabels[n.category]}</span><small>{n.path}</small></button>)}
     {!!page.invalidRecords.length&&<details className="card"><summary>Не удалось прочитать {page.invalidRecords.length} заметок</summary>{page.invalidRecords.map(n=><p key={n.path}>{n.path}: {n.error}</p>)}</details>}
+  </>}
   </>}</div></div>;
 }

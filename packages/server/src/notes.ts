@@ -1,8 +1,9 @@
 import { isPreferencesPath } from '@relay/core';
 import { randomUUID } from 'node:crypto';
 import { Document, parseDocument, isMap } from 'yaml';
-import { DomainError, objectInput, hashContent, readTaskDocument, sanitizeFileName, searchNotes, parseFrontmatter, getSearchIndex, type Vault, type NoteCreateInput, type NoteRecord, type NotePage, type NoteEditInput, type NoteWriteResult } from '@relay/core';
+import { DomainError, objectInput, hashContent, readTaskDocument, sanitizeFileName, searchNotes, parseFrontmatter, getSearchIndex, renderTemplate, type Vault, type NoteCreateInput, type NoteRecord, type NotePage, type NoteEditInput, type NoteWriteResult } from '@relay/core';
 import type { VaultMutationService } from './vault-mutations.js';
+import { allocateRecordTitle, codedTitle, recordCode, recordFileName } from './record-codes.js';
 
 const folders = { study: 'Study', work: 'Work', personal: 'Personal' };
 export function noteKeywords(text: string): string[] {
@@ -36,12 +37,28 @@ export function readNoteRecord(path: string, content: string, updatedAt: number)
 }
 export class NoteService {
   constructor(readonly vault: Vault, private readonly mutations: VaultMutationService) {}
+  async capture(text:string,title:string,folder:string,operationId:string) {
+    if(!text.trim()||text.length>1_000_000||text.includes('\0')||!title.trim()||title.length>200||/[\r\n\0]/.test(title))throw new DomainError('INVALID_NOTE','Укажите короткое название и текст заметки.');
+    return this.mutations.mutate({operationId,request:{kind:'quick-capture',text,title,folder},prepare:async()=>{
+      const coded=await allocateRecordTitle(this.vault,title);
+      let content='';
+      if(this.vault.config.noteTemplate)try{
+        const template=await this.vault.readNote(this.vault.config.noteTemplate);
+        content=renderTemplate(template.content,{title:coded,content:text.trim()});
+        if(!template.content.includes('{{content}}'))content=content.trimEnd()+'\n\n'+text.trim()+'\n';
+      }catch{}
+      if(!content)content='# '+coded+'\n\n'+text.trim()+'\n';
+      const parsed=parseFrontmatter(content);
+      parsed.doc.set('id','note_'+randomUUID());parsed.doc.set('title',coded);parsed.doc.set('type','quick');parsed.doc.set('created_at',new Date().toISOString());parsed.doc.set('source','mobile');
+      return {path:[folder.replace(/\/+$/,''),recordFileName(coded)+'.md'].filter(Boolean).join('/'),content:'---\n'+parsed.doc.toString()+'---\n'+parsed.body,baseHash:null};
+    }});
+  }
   async list(query=''): Promise<NotePage> {
     const items:NotePage['items']=[],invalidRecords:NotePage['invalidRecords']=[];
     const documents = await getSearchIndex(this.vault).documents();
     const matches = query ? new Set((await searchNotes(this.vault, query, { limit: 100 })).map(h => h.path)) : null;
     for (const { meta, parsed } of documents.sort((a,b)=>b.meta.mtime-a.meta.mtime)) {
-      if (/^Areas\/[^/]+\/Tasks\//i.test(meta.path)) continue;
+      if (/^Areas\/[^/]+\/Tasks\//i.test(meta.path) || meta.path.startsWith('Archive/Completed/')) continue;
       try { if(matches && !matches.has(meta.path))continue; const n=readNoteRecord(meta.path,parsed.content,meta.mtime); const {content:_c,body:_b,...brief}=n; items.push(brief); }
       catch(e) { if(e instanceof DomainError && e.code==='NOTE_NOT_EDITABLE')continue; invalidRecords.push({path:meta.path,error:e instanceof DomainError?e.message:'Не удалось прочитать заметку.'}); }
     }
@@ -52,10 +69,11 @@ export class NoteService {
     const fields=validateNote(value), id='note_'+randomUUID();
     const receipt=await this.mutations.mutate({operationId,request:{kind:'manual-note-create',fields},prepare:async()=>{
       const folder=fields.kind==='person'?'People':'Areas/'+folders[fields.category]+'/'+(fields.kind==='idea'?'Ideas':'Notes');
-      const path=folder+'/'+sanitizeFileName(fields.title)+'-'+hashContent(operationId).slice(0,12)+'.md';
+      const title = await allocateRecordTitle(this.vault, fields.title);
+      const path=folder+'/'+recordFileName(title)+'.md';
       const related=(await searchNotes(this.vault,(fields.keywords.length?fields.keywords:noteKeywords(fields.title+' '+fields.body)).slice(0,5).join(' '),{limit:5})).filter(n=>n.score>0);
       const body=fields.body+(related.length?'\n\n## Связанные заметки\n'+related.map(n=>'- [['+n.path.replace(/\.md$/i,'')+']]').join('\n'):'');
-      return {path,baseHash:null,content:this.render('',{...fields,body},id)};
+      return {path,baseHash:null,content:this.render('',{...fields,title,body},id)};
     }});
     return {note:await this.get(receipt.path),receipt};
   }
@@ -68,7 +86,9 @@ export class NoteService {
     const receipt=await this.mutations.mutate({operationId,request:{kind:'note-edit',path,expectedHash,value},prepare:async()=>{
       const old=await this.get(path);
       if(old.contentHash!==expectedHash)throw new DomainError('VERSION_CONFLICT','Заметка изменилась в Obsidian. Ваш черновик сохранён в редакторе; загрузите актуальную версию и сравните.',409);
-      let content=fields?this.render(old.content,fields,old.id??'note_'+randomUUID()):value.content!;
+      const code = recordCode(old.title);
+      let content=fields?this.render(old.content,code ? {...fields,title:codedTitle(fields.title,code)} : fields,old.id??'note_'+randomUUID()):value.content!;
+      if (code && recordCode(readNoteRecord(old.path, content, old.updatedAt).title) !== code) throw new DomainError('NOTE_CODE_IMMUTABLE','Код заметки нельзя изменять.');
       assertOrdinary(old.path,content); const next=split(content);
       if(preserveUnknown){
         const previous=split(old.content),allowed=new Set(['title','type','category','tags','keywords','aliases','phone','email','role','updated_at']);

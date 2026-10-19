@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { DomainError, objectInput, sanitizeFileName, searchNotes, hashContent, readTaskDocument, getSearchIndex, type Vault, type Category } from '@relay/core';
 import type { VaultMutationService } from './vault-mutations.js';
 import { NoteService, readNoteRecord } from './notes.js';
+import { allocateRecordTitle, recordFileName } from './record-codes.js';
 
 const folders={study:'Study',work:'Work',personal:'Personal'};
 const stop=new Set(['что','как','для','или','это','его','она','они','мне','меня','надо','нужно','есть','будет','быть','этот','этого','the','and','with','note']);
@@ -45,7 +46,7 @@ export class NoteModeService {
       const matches=[];
       for(const {meta,parsed} of await getSearchIndex(this.vault).documents()){
         if(!meta.path.startsWith('People/'))continue;
-        try{const card=readNoteRecord(meta.path,parsed.content,meta.mtime);if(card.kind==='person'&&(card.title.toLowerCase()===title.toLowerCase()||card.aliases.some(a=>a.toLowerCase()===title.toLowerCase())||card.path===title))matches.push(card);}catch{}
+        try{const card=readNoteRecord(meta.path,parsed.content,meta.mtime);if(card.kind==='person'&&(card.title.replace(/ #[A-Z0-9]{4,8}$/, '').toLowerCase()===title.toLowerCase()||card.aliases.some(a=>a.toLowerCase()===title.toLowerCase())||card.path===title))matches.push(card);}catch{}
       }
       if(matches.length>1) return {text:'Найдено несколько карточек. Укажите полный путь вместо имени:\n'+matches.map(p=>'- '+p.path).join('\n')};
       if(matches.length===1) return this.append(matches[0].path,content,operationId,signal);
@@ -54,11 +55,13 @@ export class NoteModeService {
     const tags=keywords(title+' '+content),cat=category(title+' '+content,args.category);
     const related=await this.related(tags);
     const folder=kind==='person'?'People':'Areas/'+folders[cat]+'/'+(kind==='idea'?'Ideas':'Notes');
-    const notePath=folder+'/'+sanitizeFileName(title)+(kind==='person'?'':'-'+operationId.slice(-12))+'.md';
-    const front={relay_schema:1,id:'note_'+randomUUID(),type:kind,category:cat,keywords:tags,tags:[cat,kind],created_at:new Date().toISOString()};
-    const markdown='---\n'+Object.entries(front).map(([k,v])=>k+': '+JSON.stringify(v)).join('\n')+'\n---\n\n# '+title+'\n\n'+content+(related.length?'\n\n## Связанные заметки\n'+related.map(p=>'- [['+p.replace(/\.md$/,'')+']]').join('\n'):'')+'\n';
-    const receipt=await this.mutations.mutate({operationId,request:{kind:'note-create',title,content,noteKind:kind,category:cat},prepare:async()=>{if(signal?.aborted)throw new DomainError('CANCELLED','Запрос отменён.');return {path:notePath,content:markdown,baseHash:null};}});
-    return {text:'Сохранено: [['+receipt.path.replace(/\.md$/,'')+']]',path:receipt.path,receipt};
+    const receipt=await this.mutations.mutate({operationId,request:{kind:'note-create',title,content,noteKind:kind,category:cat},prepare:async()=>{
+      if(signal?.aborted)throw new DomainError('CANCELLED','Запрос отменён.');
+      const coded = await allocateRecordTitle(this.vault,title);
+      const front={relay_schema:1,id:'note_'+randomUUID(),title:coded,type:kind,category:cat,keywords:tags,tags:[cat,kind],aliases:kind==='person'?[title]:[],created_at:new Date().toISOString()};
+      const markdown='---\n'+Object.entries(front).map(([k,v])=>k+': '+JSON.stringify(v)).join('\n')+'\n---\n\n# '+coded+'\n\n'+content+(related.length?'\n\n## Связанные заметки\n'+related.map(p=>'- [['+p.replace(/\.md$/,'')+']]').join('\n'):'')+'\n';
+      return {path:folder+'/'+recordFileName(coded)+'.md',content:markdown,baseHash:null};
+    }});    return {text:'Сохранено: [['+receipt.path.replace(/\.md$/,'')+']]',path:receipt.path,receipt};
   }
   private async related(words:string[]):Promise<string[]>{
     if(!words.length)return [];
