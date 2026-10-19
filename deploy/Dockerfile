@@ -5,7 +5,7 @@ COPY package.json package-lock.json* ./
 COPY packages/core/package.json packages/core/
 COPY packages/server/package.json packages/server/
 COPY packages/app/package.json packages/app/
-RUN npm ci --ignore-scripts
+RUN npm install --global npm@11.17.0 && npm ci --ignore-scripts
 COPY tsconfig.base.json ./
 COPY packages ./packages
 RUN npm run build
