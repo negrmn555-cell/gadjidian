@@ -1,7 +1,8 @@
 import { Fragment, type ReactNode } from 'react';
 
 /** Tiny safe Markdown renderer: headings, lists, bold, code, links, [[wikilinks]]. No HTML passthrough. */
-export function Markdown({ text }: { text: string }) {
+export function Markdown({ text, onWikiLink }: { text: string; onWikiLink?: (target: string) => void }) {
+  const inline = (text: string) => renderInline(text, onWikiLink);
   const lines = text.replace(/\r\n/g, '\n').split('\n');
   const out: ReactNode[] = [];
   let inCode = false;
@@ -103,7 +104,7 @@ function tableCells(line: string): string[] {
   cells.push(cell.trim()); return cells;
 }
 
-function inline(s: string): ReactNode {
+function renderInline(s: string, onWikiLink?: (target: string) => void): ReactNode {
   const parts: ReactNode[] = [];
   const re = /(\*\*[^*]+\*\*|`[^`]+`|\[\[[^\]]+\]\]|\[[^\]]+\]\((https?:\/\/[^)\s]+)\)|https?:\/\/[^\s)]+)/g;
   let last = 0;
@@ -118,7 +119,7 @@ function inline(s: string): ReactNode {
       const inner = tok.slice(2, -2);
       const [target, alias] = inner.split('|');
       parts.push(
-        <button key={k++} className="wiki-link" onClick={()=>window.dispatchEvent(new CustomEvent('relay-open-note',{detail:{target}}))}>
+        <button key={k++} className="wiki-link" onClick={()=>onWikiLink ? onWikiLink(target) : window.dispatchEvent(new CustomEvent('relay-open-note',{detail:{target}}))}>
           {alias ?? target.split('/').pop()}
         </button>,
       );

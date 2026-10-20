@@ -9,8 +9,9 @@ export function EditorOverlay({label,children}:{label:string;children:ReactNode}
     const previous=document.activeElement as HTMLElement|null,dialog=ref.current;
     const hiddenSiblings=new Map<Element,boolean>();
     let branch:Element|null=dialog?.parentElement??null;
-    while(branch?.parentElement&&branch.parentElement!==document.body){
+    while(branch?.parentElement){
       for(const sibling of branch.parentElement.children)if(sibling!==branch){hiddenSiblings.set(sibling,sibling.hasAttribute('inert'));sibling.setAttribute('inert','');}
+      if(branch.parentElement===document.body)break;
       branch=branch.parentElement;
     }
     (dialog?.querySelector<HTMLElement>('button:not(:disabled),input:not(:disabled),textarea:not(:disabled),select:not(:disabled)')??dialog)?.focus();

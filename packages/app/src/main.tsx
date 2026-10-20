@@ -4,6 +4,7 @@ import { registerSW } from 'virtual:pwa-register';
 import { App } from './App';
 import './styles.css';
 import './liquid-glass.css';
+import './note-graph.css';
 
 registerSW({ immediate: true });
 

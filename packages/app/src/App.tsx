@@ -245,7 +245,7 @@ export function App() {
       <div className="app-content">
         <div className="app-panel" hidden={tab !== 'chat'}>{chat ? <Chat key={chat.id} chat={chat} controlsOpen={chatControls && tab === 'chat' && screen === 'chat'} onCloseControls={() => setChatControls(false)} draft={drafts[chat.id] ?? (chat.messageCount === 0 ? shared : '')} onDraft={text => { saveDraft(chat.id, text, chat.expiresAt); setDrafts(old => ({ ...old, [chat.id]: text })); setShared(''); }} onUpdated={updated} onUnauthorized={unauthorized} onBusy={setBusy} /> : <div className="empty"><p>{starting ? 'Открываю новый чат…' : 'Не удалось открыть чат.'}</p>{!starting && <button className="btn" onClick={() => void makeChat(false)}>Повторить</button>}</div>}</div>
         <div className="app-panel" hidden={tab !== 'tasks'}><Tasks onSettings={() => navigate('settings')} onUnauthorized={unauthorized} addTaskSignal={0} /></div>
-        <div className="app-panel" hidden={tab !== 'notes'}><Notes onBack={() => navigate('tasks')} onUnauthorized={unauthorized} /></div>
+        <div className="app-panel" hidden={tab !== 'notes'}><Notes onBack={() => navigate('tasks')} onUnauthorized={unauthorized} active={tab === 'notes' && screen === 'chat'} /></div>
       </div>
     </div>
       </div>

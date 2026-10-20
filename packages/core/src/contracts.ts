@@ -13,7 +13,7 @@ export interface NoteCreateInput { title: string; body: string; kind: NoteKind; 
 export interface NoteRecord extends NoteCreateInput { id: string | null; path: string; content: string; contentHash: string; updatedAt: number }
 export interface NotePage { items: Omit<NoteRecord, 'content' | 'body'>[]; invalidRecords: {path: string; error: string}[] }
 export interface NoteGraph {
-  nodes: { path: string; title: string; kind: string; id: string | null }[];
+  nodes: { path: string; title: string; kind: string; id: string | null; tags: string[] }[];
   edges: { source: string; target: string }[];
   revision: string | null;
   syncMode: string;

@@ -49,11 +49,12 @@ test('record codes are unique across tasks and notes, stable on edit, and retry 
 
 test('graph resolves Markdown, wiki and related-ID links while excluding private files',async t=>{
   const f=await fixture(t);
-  await f.vault.writeNote('Notes/A.md','---\nid: a\ntitle: Альфа\n---\n[[B]]\n[C](C.md)');
+  await f.vault.writeNote('Notes/A.md','---\nid: a\ntitle: Альфа\ntags: [study]\n---\n[[B]]\n[C](C.md)\n#проект/граф `#not-a-tag`\n```md\n#also-not-a-tag\n```');
   await f.vault.writeNote('Notes/B.md','---\nid: b\nrelated_note_ids: [c]\n---\nБета');
   await f.vault.writeNote('Notes/C.md','---\nid: c\n---\nГамма');
   await fs.mkdir(path.join(f.vault.root,'Private'));await fs.writeFile(path.join(f.vault.root,'Private/secret.md'),'Secret');
   const graph=await notesGraph(f.vault,'sha123','git');assert.equal(graph.nodes.length,3);assert.equal(graph.edges.length,3);assert.equal(graph.revision,'sha123');assert.equal(graph.nodes.some(n=>n.path.startsWith('Private/')),false);
+  assert.deepEqual(graph.nodes.find(node=>node.path==='Notes/A.md')?.tags,['study','проект/граф']);
 });
 
 test('14-day boundary archives only after valid AI summary, repairs backlinks and creates a real Base',async t=>{
