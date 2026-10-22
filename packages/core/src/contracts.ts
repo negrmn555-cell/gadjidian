@@ -3,8 +3,9 @@ export const APP_VERSION = '0.2.0';
 export * from './preferences.js';
 export type Id = string;
 export type ChatMode = 'task' | 'note';
-export interface TaskDraftState { id: string; version: number; createdAt: number; task: Partial<TaskCreateInput>; tasks?:Partial<TaskCreateInput>[]; question: string; referenceInstant?:string }
-export interface ChatSession { id: string; title: string; mode: ChatMode; timezone: string; version: number; createdAt: number; updatedAt: number; expiresAt: number; messageCount: number; pendingTask: TaskDraftState | null; providerId?:string|null }
+export interface TaskDraftState { id: string; version: number; createdAt: number; task: Partial<TaskCreateInput>; tasks?:Partial<TaskCreateInput>[]; question: string; referenceInstant?:string; operation?:Record<string,unknown>; userSources?:{text:string;referenceInstant:string}[] }
+export interface TaskConversationContext { recentTaskIds: string[]; seriesId?: string }
+export interface ChatSession { id: string; title: string; mode: ChatMode; timezone: string; version: number; createdAt: number; updatedAt: number; expiresAt: number; messageCount: number; pendingTask: TaskDraftState | null; providerId?:string|null; taskContext?:TaskConversationContext }
 export interface ChatPage { items: ChatSession[] }
 export interface Attachment { id: string; chatId: string; name: string; mediaType: string; size: number; createdAt: number; expiresAt: number; kind: 'text' | 'image'; textLength: number; processing?:'queued'|'running'|'ready'|'failed';processingError?:string|null; extraction?: {status:'complete'|'partial';pages:number;warnings:string[];visualPages?:number[];analyzedPages?:number[]} }
 export interface ChatSendInput { chatId: string; requestId: string; expectedVersion: number; text: string; attachmentIds: string[]; draftId?: string; draftVersion?: number }
@@ -34,6 +35,14 @@ export type Deadline =
   | { kind: 'by_date'; date: string; timezone: string }
   | { kind: 'by_time' | 'at_time'; at: string; timezone: string };
 
+export interface TaskRecurrence { frequency: 'daily' | 'weekly' | 'monthly' | 'yearly'; interval: number; weekdays?: number[] }
+export interface TaskSeries {
+  id: string;
+  index: number;
+  anchor: Deadline;
+  recurrence: TaskRecurrence;
+}
+
 export interface TaskCreateInput {
   title: string;
   description: string;
@@ -43,6 +52,7 @@ export interface TaskCreateInput {
   keywords: string[];
   tags: string[];
   relatedNoteIds: Id[];
+  series?: TaskSeries;
 }
 
 export interface Task extends TaskCreateInput {
@@ -55,7 +65,7 @@ export interface Task extends TaskCreateInput {
   contentHash: string;
 }
 
-export type TaskPatch = Partial<TaskCreateInput & { status: TaskStatus }>;
+export type TaskPatch = Partial<Omit<TaskCreateInput, 'series'> & { status: TaskStatus }>;
 export interface InvalidTaskRecord { path: string; error: string }
 export interface TaskPage { items: Task[]; invalidRecords: InvalidTaskRecord[] }
 export interface LegacyTask { path: string; line: number; contentHash: string; title: string; completed: boolean }
@@ -159,7 +169,23 @@ export function validateTaskCreate(value: unknown): TaskCreateInput {
     keywords: strings(input.keywords, 'keywords'),
     tags: strings(input.tags, 'tags'),
     relatedNoteIds: strings(input.relatedNoteIds, 'relatedNoteIds'),
+    ...(input.series !== undefined ? {series: validateTaskSeries(input.series)} : {}),
   };
+}
+
+export function validateTaskRecurrence(value: unknown): TaskRecurrence {
+  const input = objectInput(value);
+  if (Object.keys(input).some(k => !['frequency','interval','weekdays'].includes(k))) throw new DomainError('INVALID_SERIES', 'Некорректное правило повторения.');
+  const frequency = member(input.frequency, ['daily','weekly','monthly','yearly'] as const, 'frequency');
+  if (!Number.isSafeInteger(input.interval) || Number(input.interval) < 1 || Number(input.interval) > 365) throw new DomainError('INVALID_SERIES', 'Интервал повторения должен быть от 1 до 365.');
+  if (input.weekdays !== undefined && (frequency !== 'weekly' || !Array.isArray(input.weekdays) || !input.weekdays.length || input.weekdays.length > 7 || input.weekdays.some(d => !Number.isInteger(d) || d < 1 || d > 7))) throw new DomainError('INVALID_SERIES', 'Дни недели задаются числами от 1 до 7 для недельной серии.');
+  return {frequency, interval: Number(input.interval), ...(input.weekdays !== undefined ? {weekdays: [...new Set(input.weekdays as number[])].sort((a,b)=>a-b)} : {})};
+}
+
+export function validateTaskSeries(value: unknown): TaskSeries {
+  const input = objectInput(value);
+  if (Object.keys(input).some(k => !['id','index','anchor','recurrence'].includes(k)) || typeof input.id !== 'string' || !/^series_[a-f0-9]{32}$/.test(input.id) || !Number.isSafeInteger(input.index) || Number(input.index) < 0 || Number(input.index) > 100_000) throw new DomainError('INVALID_SERIES', 'Некорректные метаданные серии.');
+  return {id: input.id, index: Number(input.index), anchor: validateDeadline(input.anchor), recurrence: validateTaskRecurrence(input.recurrence)};
 }
 
 export function validateTaskStatus(value: unknown): TaskStatus {

@@ -1,4 +1,4 @@
-import { DomainError } from '@relay/core';
+import { DomainError, hashContent, type Vault } from '@relay/core';
 import type { Db } from './db.js';
 import { fingerprint } from './vault-mutations.js';
 export class RequestLedger {
@@ -26,5 +26,15 @@ export class RequestLedger {
     }
   }
   artifacts(deviceId:number,chat:string,requestId:string):string[]{const prefix='chatop_'+fingerprint({deviceId,chat,requestId}).slice(0,64);const paths=this.db.sql.prepare("SELECT path FROM vault_operations WHERE operation_id LIKE ? AND state<>'conflict'").all(prefix+'%') as {path:string}[];const batches=this.db.sql.prepare("SELECT files_json FROM vault_batches WHERE operation_id LIKE ? AND state<>'conflict'").all(prefix+'%') as {files_json:string}[];return [...new Set([...paths.map(p=>p.path),...batches.flatMap(b=>(JSON.parse(b.files_json) as {path:string;delete?:boolean}[]).filter(f=>!f.delete).map(f=>f.path))])];}
+  async confirmedTaskArtifacts(deviceId:number,chat:string,requestId:string,vault:Vault):Promise<string[]> {
+    const prefix='chatop_'+fingerprint({deviceId,chat,requestId}).slice(0,64);
+    const operations=this.db.sql.prepare('SELECT path,content_hash AS contentHash FROM vault_operations WHERE operation_id LIKE ?').all(prefix+'%') as {path:string;contentHash:string}[];
+    const batches=this.db.sql.prepare('SELECT files_json FROM vault_batches WHERE operation_id LIKE ?').all(prefix+'%') as {files_json:string}[];
+    const expected=[...operations,...batches.flatMap(b=>(JSON.parse(b.files_json) as {path:string;contentHash:string;delete?:boolean}[]).filter(f=>!f.delete))];
+    const confirmed:string[]=[];
+    // A prepared batch is an intention. Only matching bytes prove that a task was saved.
+    for(const file of expected)try{if(hashContent((await vault.readNote(file.path)).content)===file.contentHash)confirmed.push(file.path);}catch{}
+    return [...new Set(confirmed)];
+  }
   recent(device:number,chat:string):{requestId:string;state:string;artifacts:string[]}[]{return (this.db.sql.prepare("SELECT request_id,state,artifacts_json FROM request_tombstones WHERE device_id=? AND chat_id=? AND created_at>? ORDER BY created_at DESC LIMIT 10").all(device,chat,this.now()-14*86400000) as {request_id:string;state:string;artifacts_json:string}[]).map(r=>({requestId:r.request_id,state:r.state,artifacts:JSON.parse(r.artifacts_json)}));}
 }

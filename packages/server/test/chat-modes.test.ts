@@ -75,7 +75,7 @@ test('invented deadlines, impossible dates and DST folds produce clarification w
 test('strict task JSON rejects prose, duplicate fields and unknown task operations',async t=>{
   for(const bad of ['```json\n{}\n```','{"state":"ready","state":"needs_input"}','{} trailing'])assert.throws(()=>parseModeJson(bad),/некорректный/);
   const f=await fixture(t);let c=f.db.chats.create(1,'strict-mode-entry','UTC');c=f.db.chats.changeMode(1,c.id,'task',1);
-  await assert.rejects(run(f,c,'Task', {...draft(),writeNow:true}),/Некорректный/);assert.equal((await f.vault.listNotes()).length,0);
+  const result=await run(f,c,'Task', {...draft(),writeNow:true});assert.equal(result.outcome,'failed');assert.equal(result.error?.code,'TASK_MODEL_OUTPUT_INVALID');assert.match(result.text,/Ничего не записано/);assert.doesNotMatch(result.text,/Ожидается объект/);assert.equal((await f.vault.listNotes()).length,0);
 });
 test('commands cannot bypass modes or write managed tasks through note append',async t=>{
   const f=await fixture(t);let c=f.db.chats.create(1,'mode-command-entry','UTC');

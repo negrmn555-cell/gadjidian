@@ -11,7 +11,11 @@ export function ToolCallCard({tool,onOpen}:{tool:ToolProgress;onOpen:(path:strin
 export function RunProgress({tools,onOpen,pending=false}:{tools:ToolProgress[];onOpen:(path:string)=>void;pending?:boolean}){
   return tools.length?<section className="run-progress" aria-label="Ход работы" aria-busy={pending}><span className="sr-only" role="status">{pending?'Ассистент выполняет действия':'Работа завершена'}</span>{tools.map(tool=><ToolCallCard key={tool.id} tool={tool} onOpen={onOpen}/>)}</section>:null;
 }
-export function SavedArtifacts({receipts,onOpen}:{receipts:MutationReceipt[];onOpen:(path:string)=>void}){return receipts.length?<ul className="saved-artifacts" aria-label="Подтверждённые записи">{receipts.map((r,i)=><li key={r.operationId+i}><button className="wiki-link" disabled={isTask(r.path)} onClick={()=>onOpen(r.path)}>{r.path}</button><small> · {saved[r.state]}</small></li>)}</ul>:null;}
+export function SavedArtifacts({receipts,onOpen}:{receipts:MutationReceipt[];onOpen:(path:string)=>void}){
+  if(!receipts.length)return null;
+  const files=<ul className="saved-artifacts" aria-label="Подтверждённые записи">{receipts.map((r,i)=><li key={r.operationId+r.path+i}><button className="wiki-link" disabled={isTask(r.path)} onClick={()=>onOpen(r.path)}>{r.path}</button><small> · {saved[r.state]}</small></li>)}</ul>;
+  return receipts.length>1&&receipts.every(r=>isTask(r.path))?<details className="saved-task-files"><summary>Подтверждённые записи: {receipts.length}</summary>{files}</details>:files;
+}
 export function PartialResult({outcome,actions,receipts,onOpen}:{outcome?:string;actions:{path:string;label:string}[];receipts:MutationReceipt[];onOpen:(path:string)=>void}){
   return outcome==='partial'?<aside className="partial-result" role="status"><strong>Выполнена часть запроса</strong><p>Сохранённые изменения остаются в хранилище. Проверьте их; новый запрос должен касаться только незавершённой части.</p><ul>{actions.map((a,i)=><li key={a.path+i}><button className="wiki-link" disabled={isTask(a.path)} onClick={()=>onOpen(a.path)}>{a.label} · {a.path}</button>{receipts.find(r=>r.path===a.path)&&<small> · {saved[receipts.find(r=>r.path===a.path)!.state]}</small>}</li>)}</ul></aside>:null;
 }

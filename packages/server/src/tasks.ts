@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto';
-import { DomainError, createTaskDocument, updateTaskDocument, readTaskDocument, hashContent, searchNotes, sourceVersion, vaultLinks, validateTaskCreate, validateTaskPatch, getSearchIndex, sanitizeFileName, type TaskCreateInput, type LegacyTask, type Task, type TaskPage, type TaskWriteResult, type Vault } from '@relay/core';
+import { DomainError, createTaskDocument, updateTaskDocument, setTaskSeriesDocument, validateTaskSeries, readTaskDocument, hashContent, searchNotes, sourceVersion, vaultLinks, validateTaskCreate, validateTaskPatch, getSearchIndex, sanitizeFileName, type TaskCreateInput, type TaskSeries, type LegacyTask, type Task, type TaskPage, type TaskWriteResult, type Vault } from '@relay/core';
 import type { VaultMutationService } from './vault-mutations.js';
 import {noteKeywords} from './notes.js';
 import { allocateRecordTitle, codedTitle, recordCode, recordFileName } from './record-codes.js';
+import { MAX_TASK_BATCH } from './task-schedule.js';
 
 const folders = { study: 'Study', work: 'Work', personal: 'Personal' };
 
@@ -70,23 +71,51 @@ export class TaskService {
     return {task:await this.get(id),receipt:result.receipt};
   }
 
-  async create(value: unknown, operationId: string, signal?:AbortSignal): Promise<TaskWriteResult> {
+  async create(value: unknown, operationId: string, signal?:AbortSignal, guard?:()=>void): Promise<TaskWriteResult> {
     const input = validateTaskCreate(value);
     const id = 'task_' + createHash('sha256').update(operationId).digest('hex').slice(0, 32);
     const receipt = await this.mutations.mutate({
       operationId, request: { kind: 'task-create', input },
-      prepare: async () => { if(signal?.aborted)throw new DomainError('CANCELLED','Запрос отменён.');const enriched=await this.enrich(input);const title=await allocateRecordTitle(this.vault,enriched.title);if(signal?.aborted)throw new DomainError('CANCELLED','Запрос отменён.');return ({
+      prepare: async () => { guard?.();if(signal?.aborted)throw new DomainError('CANCELLED','Запрос отменён.');const enriched=await this.enrich(input);const title=await allocateRecordTitle(this.vault,enriched.title);guard?.();if(signal?.aborted)throw new DomainError('CANCELLED','Запрос отменён.');return ({
         path: 'Areas/' + folders[input.category] + '/Tasks/' + recordFileName(title) + '.md',
         content: createTaskDocument({...enriched,title}, id, this.now()), baseHash: null,
       });},
     });
     return { task: await this.get(id), receipt };
   }
-  async createMany(values:unknown[],operationId:string,signal?:AbortSignal):Promise<TaskWriteResult[]>{
-    if(!values.length||values.length>10)throw new DomainError('TASK_LIMIT','За один запрос можно добавить от одной до десяти задач.');
+  async createMany(values:unknown[],operationId:string,signal?:AbortSignal,guard?:()=>void,seriesSources?:{id:string;expectedHash:string;series:TaskSeries}[]):Promise<TaskWriteResult[]>{
+    if(!values.length||values.length>MAX_TASK_BATCH)throw new DomainError('TASK_LIMIT',`За один запрос можно добавить от 1 до ${MAX_TASK_BATCH} задач.`);
     const inputs=values.map(validateTaskCreate),ids=inputs.map((_,i)=>'task_'+createHash('sha256').update(operationId+':'+i).digest('hex').slice(0,32));
-    const result=await this.mutations.mutateBatch({operationId,request:{kind:'task-create-many',inputs},prepare:async()=>{if(signal?.aborted)throw new DomainError('CANCELLED','Запрос отменён.');const reserved=new Set<string>();const enriched=[];for(const input of inputs){const next=await this.enrich(input);enriched.push({...next,title:await allocateRecordTitle(this.vault,next.title,reserved)});}if(signal?.aborted)throw new DomainError('CANCELLED','Запрос отменён.');return {files:enriched.map((input,i)=>({path:'Areas/'+folders[input.category]+'/Tasks/'+recordFileName(input.title)+'.md',baseHash:null,bytes:Buffer.from(createTaskDocument(input,ids[i],this.now()))})),result:{ids}};}});
-    return Promise.all(ids.map(async id=>({task:await this.get(id),receipt:result.receipt})));
+    const check=()=>{if(signal?.aborted)throw new DomainError('CANCELLED','Запрос отменён.');guard?.();};
+    if(seriesSources&&(seriesSources.length>MAX_TASK_BATCH||new Set(seriesSources.map(s=>s.id)).size!==seriesSources.length))throw new DomainError('INVALID_SERIES','Некорректный список задач серии.');
+    for(const source of seriesSources??[])validateTaskSeries(source.series);
+    const result=await this.mutations.mutateBatch({operationId,request:{kind:'task-create-many',inputs,...(seriesSources?.length?{seriesSources}:{})},guard:check,prepare:async()=>{
+      check();const reserved=new Set<string>();const enriched=[];
+      for(const input of inputs){check();const next=await this.enrich(input);enriched.push({...next,title:await allocateRecordTitle(this.vault,next.title,reserved)});}
+      const files:{path:string;baseHash:string|null;bytes:Buffer}[]=enriched.map((input,i)=>({path:'Areas/'+folders[input.category]+'/Tasks/'+recordFileName(input.title)+'.md',baseHash:null,bytes:Buffer.from(createTaskDocument(input,ids[i],this.now()))}));
+      for(const link of seriesSources??[]){const source=await this.get(link.id);if(source.contentHash!==link.expectedHash)throw new DomainError('VERSION_CONFLICT','Исходная задача изменилась. Повторите запрос.',409);const note=await this.vault.readNote(source.path);files.push({path:source.path,baseHash:source.contentHash,bytes:Buffer.from(setTaskSeriesDocument(note.content,source.path,link.series,this.now()))});}
+      check();return {files,result:{ids}};
+    }});
+    return Promise.all(ids.map(async id=>{const task=await this.get(id);return {task,receipt:{...result.receipt,path:task.path,contentHash:task.contentHash}};}));
+  }
+
+  async updateMany(values:{id:string;patch:unknown;expectedHash:string;series?:TaskSeries}[],operationId:string,signal?:AbortSignal,guard?:()=>void):Promise<TaskWriteResult[]> {
+    if(!values.length||values.length>MAX_TASK_BATCH||new Set(values.map(v=>v.id)).size!==values.length)throw new DomainError('TASK_LIMIT','Выберите от 1 до 100 разных задач.');
+    const inputs=values.map(v=>{if(!/^[a-f0-9]{64}$/.test(v.expectedHash))throw new DomainError('VERSION_REQUIRED','Нужна версия задачи.');return {...v,patch:validateTaskPatch(v.patch),...(v.series?{series:validateTaskSeries(v.series)}:{})};});
+    const check=()=>{if(signal?.aborted)throw new DomainError('CANCELLED','Запрос отменён.');guard?.();};
+    const result=await this.mutations.mutateBatch({operationId,request:{kind:'task-update-many',inputs},guard:check,prepare:async()=>{
+      check();const files=[];
+      for(const input of inputs){
+        const task=await this.get(input.id);
+        if(task.contentHash!==input.expectedHash)throw new DomainError('VERSION_CONFLICT','Одна из задач изменилась. Обновите список и повторите запрос.',409);
+        const note=await this.vault.readNote(task.path),code=recordCode(task.title),patch=code&&input.patch.title?{...input.patch,title:codedTitle(input.patch.title,code)}:input.patch;
+        let content=updateTaskDocument(note.content,task.path,patch,this.now());
+        if(input.series)content=setTaskSeriesDocument(content,task.path,input.series,this.now());
+        files.push({path:task.path,baseHash:input.expectedHash,bytes:Buffer.from(content)});
+      }
+      check();return {files,result:{ids:inputs.map(i=>i.id)}};
+    }});
+    return Promise.all(inputs.map(async input=>{const task=await this.get(input.id);return {task,receipt:{...result.receipt,path:task.path,contentHash:task.contentHash}};}));
   }
 
   async update(id: string, value: unknown, expectedHash: string, operationId: string): Promise<TaskWriteResult> {

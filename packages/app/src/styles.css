@@ -249,6 +249,9 @@ summary { cursor: pointer; color: var(--fg2); }
   .icon-btn:active, .btn:active, .round:active, .command-button:active { transform: none; }
 }
 .run-progress { display:grid; gap:8px; margin:0 0 12px; min-width:0; }
+.saved-task-files { margin:0 0 12px; min-width:0; }
+.saved-task-files summary { cursor:pointer; color:var(--fg2); overflow-wrap:anywhere; }
+.saved-task-files li { overflow-wrap:anywhere; }
 .tool-call { border:1px solid var(--border); border-radius:10px; padding:10px 12px; min-width:0; }
 .tool-call summary { cursor:pointer; display:flex; justify-content:space-between; flex-wrap:wrap; gap:6px; overflow-wrap:anywhere; }
 .tool-call summary small { color:var(--fg2); white-space:normal; }

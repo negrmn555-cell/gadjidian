@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { parseDocument, Document } from 'yaml';
 import { parseFrontmatter } from './frontmatter.js';
-import { DomainError, validateTaskCreate, validateTaskStatus, type Task, type TaskCreateInput, type TaskPatch } from './contracts.js';
+import { DomainError, validateTaskCreate, validateTaskStatus, validateTaskSeries, type Task, type TaskCreateInput, type TaskPatch, type TaskSeries } from './contracts.js';
 
 export const hashContent = (content: string): string => createHash('sha256').update(content).digest('hex');
 const ID = /^task_[a-f0-9]{32}$/;
@@ -21,7 +21,7 @@ export function readTaskDocument(content: string, path: string): Task | null {
     deadline: values.deadline_kind === 'by_date'
       ? { kind: values.deadline_kind, date: values.deadline_date, timezone: values.deadline_timezone, ...(values.deadline_at !== undefined ? { at: values.deadline_at } : {}) }
       : { kind: values.deadline_kind, at: values.deadline_at, timezone: values.deadline_timezone, ...(values.deadline_date !== undefined ? { date: values.deadline_date } : {}) },
-    keywords: values.keywords, tags: values.tags, relatedNoteIds: values.related_note_ids,
+    keywords: values.keywords, tags: values.tags, relatedNoteIds: values.related_note_ids, series: values.task_series,
   });
   const status = validateTaskStatus(values.status);
   const createdAt = timestamp(values.created_at);
@@ -46,6 +46,8 @@ function setFields(doc: Document, task: TaskCreateInput, status: Task['status'],
     related_note_ids: task.relatedNoteIds,
   };
   for (const [key, value] of Object.entries(fields)) doc.set(key, value);
+  if (task.series) doc.set('task_series', task.series);
+  else doc.delete('task_series');
   if (task.deadline.kind === 'by_date') { doc.set('deadline_date', task.deadline.date); doc.delete('deadline_at'); }
   else { doc.set('deadline_at', task.deadline.at); doc.delete('deadline_date'); }
 }
@@ -68,4 +70,13 @@ export function updateTaskDocument(content: string, path: string, patch: TaskPat
   const status = patch.status ?? task.status;
   setFields(fm.doc, merged, status, now, status === 'done' ? task.completedAt ?? now : null);
   return '---\n' + fm.doc.toString() + '---\n' + (patch.description ?? fm.body);
+}
+
+/** Series membership is managed by TaskService, never by generic note edits or task patches. */
+export function setTaskSeriesDocument(content:string,path:string,series:TaskSeries,now:string):string {
+  if(!readTaskDocument(content,path))throw new DomainError('NOT_FOUND','Задача не найдена.',404);
+  const fm=frontmatter(content)!;
+  fm.doc.set('task_series',validateTaskSeries(series));
+  fm.doc.set('updated_at',now);
+  return '---\n'+fm.doc.toString()+'---\n'+fm.body;
 }

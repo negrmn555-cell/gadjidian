@@ -101,7 +101,7 @@ export function Chat({ chat, draft, controlsOpen, onCloseControls, onDraft, onUp
     if (runTimer.current) clearTimeout(runTimer.current);
     pending.current = null;
     setBusy(false);
-    setMessages(items => items.filter(item => !item.pending && item.id !== result.messageId).concat({ id: result.messageId, role: 'assistant', content: result.text, createdAt: Date.now(), meta: { tools:result.tools,receipts:result.receipts,outcome:result.outcome,warnings:result.warnings,sources: result.sources, actions: result.actions }, animate: true }));
+    setMessages(items => items.filter(item => !item.pending && item.id !== result.messageId).concat({ id: result.messageId, role: 'assistant', content: result.text, createdAt: Date.now(), meta: { error:result.outcome==='failed',tools:result.tools,receipts:result.receipts,outcome:result.outcome,warnings:result.warnings,sources: result.sources, actions: result.actions }, animate: true }));
     handlers.current.onUpdated(result.chat);
   };
 

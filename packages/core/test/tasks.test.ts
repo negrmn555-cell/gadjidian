@@ -55,3 +55,12 @@ test('switching deadline kinds removes old metadata and malformed managed tasks 
   assert.throws(() => readTaskDocument(created.replace('status: todo', 'status: done'), 'task.md'), /не согласованы/);
   assert.throws(() => readTaskDocument(created.replace('deadline_date: 2026-10-05', 'deadline_date: impossible'), 'task.md'), DomainError);
 });
+
+test('series metadata survives document updates and rejects malformed or externally patched membership',()=>{
+  const series={id:'series_'+'b'.repeat(32),index:2,anchor:input.deadline,recurrence:{frequency:'weekly' as const,interval:1,weekdays:[1,3]}};
+  const content=createTaskDocument({...input,series},id,'2026-10-02T09:00:00Z');
+  assert.deepEqual(readTaskDocument(content,'task.md')!.series,series);
+  assert.deepEqual(readTaskDocument(updateTaskDocument(content,'task.md',{status:'done'},'2026-10-03T09:00:00Z'),'task.md')!.series,series);
+  assert.throws(()=>validateTaskPatch({series}),/Недопустимое/);
+  for(const invalid of [{...series,id:'unknown'},{...series,index:-1},{...series,recurrence:{frequency:'daily',interval:1,weekdays:[1]}},{...series,recurrence:{frequency:'weekly',interval:0}}])assert.throws(()=>validateTaskCreate({...input,series:invalid}),DomainError);
+});

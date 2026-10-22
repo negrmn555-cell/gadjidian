@@ -495,8 +495,8 @@ async function createUnlockedServer(cfg:ServerConfig) {
       const remembered=session.mode==='note'?await measure('context',()=>memory.readContext(deviceId,chat)):null;
       userMessageId=db.addMessage(deviceId,chat,'user',text||'Прикреплены файлы',{attachments:input.attachmentIds.map(id=>{const {bytes:_b,text:_t,report:_r,...f}=db.chats.attachment(deviceId,chat,id);return f;}),mode:session.mode});
       const history = remembered?.history??db
-        .listMessages(deviceId, chat, 12)
-        .filter((m) => m.id !== userMessageId && (session.mode!=='task' || session.pendingTask!==null && m.createdAt>=session.pendingTask.createdAt))
+        .listMessages(deviceId, chat, session.mode==='task'?24:12)
+        .filter((m) => m.id !== userMessageId)
         .map((m) => ({ role: m.role, content: m.content,createdAt:m.createdAt }));
       const operationId='chatop_'+fingerprint({deviceId,chat,requestId:input.requestId}).slice(0,64);
       const result:AgentResult = remember!==null ? await (async()=>{const saved=await preferences.remember(deviceId,remember,operationId+'_remember');return {text:'Правило сохранено в долговременной памяти.',sources:[],actions:[{kind:'updated' as const,path:saved.receipt.path,label:'Предпочтения сохранены'}],receipts:[saved.receipt]};})() : await modes.run({preferencesContext:preferences.context(preferenceSnapshot),device:deviceId,chat:session,text:prompt,userText:text,contextTools:files.length?[attachmentTool(db.chats,deviceId,chat,ids)]:undefined,history,parts,operationId,referenceInstant,onEvent:emit,engine,maxSteps:cfg.agent?.maxSteps??4,signal:ac.signal,llm:binding?.client??llm,toolsEnabled:binding?.profile.capabilities.toolCalls??false,structuredOutput:binding?.profile.capabilities.structuredOutput??false,extraPrompt:scenarios.systemPrompt,memoryContext:remembered?.context});
@@ -508,7 +508,7 @@ async function createUnlockedServer(cfg:ServerConfig) {
       for(const a of result.actions)try{const n=await vault.readNote(a.path);refs.set(n.path,sourceVersion(n.path,n.content));}catch{}
       result.sourceVersions=[...refs.values()];
       result.tools=db.chats.events.terminalTools(deviceId,chat,input.requestId,result.outcome??'success');
-      const messageId = db.addMessage(deviceId, chat, 'assistant', result.text, { tools:result.tools,receipts:result.receipts,outcome:result.outcome??'success',warnings:result.warnings,sources: result.sources, sourceVersions:result.sourceVersions,actions: result.actions, usage: result.usage,
+      const messageId = db.addMessage(deviceId, chat, 'assistant', result.text, { error:result.outcome==='failed',errorCode:result.error?.code,tools:result.tools,receipts:result.receipts,outcome:result.outcome??'success',warnings:result.warnings,sources: result.sources, sourceVersions:result.sourceVersions,actions: result.actions, usage: result.usage,
         provider: binding ? { id: binding.profile.id, version: binding.profile.version, modelId: binding.profile.modelId } : null });
       await memory.record(deviceId,chat,result).catch(()=>{});
       const response={ ...result,outcome:result.outcome??'success', userMessageId, messageId,chat:db.chats.get(deviceId,chat),sync:sync.getStatus() };
@@ -517,10 +517,10 @@ async function createUnlockedServer(cfg:ServerConfig) {
       db.chats.events.finish(deviceId,chat,input.requestId,response);
       summaryJobs.recover(scheduler);recordDuration('finalize',performance.now()-finalizedAt);return response;
     } catch (e) {
-      const errText = ac.signal.aborted ? 'Запрос отменён.' : e instanceof DomainError?e.message:'Не удалось выполнить запрос к ИИ. Проверьте подключение и попробуйте снова.';
+      const errText = ac.signal.aborted ? 'Запрос отменён.' : session.mode==='task'&&e instanceof DomainError&&['VALIDATION_ERROR','MODEL_OUTPUT_INVALID'].includes(e.code)?'Не удалось подготовить задачи из ответа ИИ. Повторите запрос.':e instanceof DomainError?e.message:'Не удалось выполнить запрос к ИИ. Проверьте подключение и попробуйте снова.';
       if(!userMessageId)userMessageId=db.addMessage(deviceId,chat,'user',text||'Прикреплены файлы');
 
-      const artifacts=ledger.artifacts(deviceId,chat,input.requestId),outcome:NonNullable<AgentResult['outcome']>=artifacts.length?'partial':ac.signal.aborted?'cancelled':'failed';
+      const artifacts=session.mode==='task'?await ledger.confirmedTaskArtifacts(deviceId,chat,input.requestId,vault):ledger.artifacts(deviceId,chat,input.requestId),outcome:NonNullable<AgentResult['outcome']>=artifacts.length?'partial':ac.signal.aborted?'cancelled':'failed';
       const code=ac.signal.aborted?'CANCELLED':e instanceof DomainError?e.code:'MODEL_FAILED';
       const tools=db.chats.events.terminalTools(deviceId,chat,input.requestId,outcome);
       const actions=artifacts.map(path=>({kind:'updated' as const,path,label:'Сохранённый результат'}));

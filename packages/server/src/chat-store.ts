@@ -1,6 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
-import { DomainError, validateTimezone, type ChatSession, type ChatMode, type TaskDraftState, type Attachment, type ExtractionReport, type ChatMemory } from '@relay/core';
+import { DomainError, validateTimezone, type ChatSession, type ChatMode, type TaskDraftState, type TaskConversationContext, type Attachment, type ExtractionReport, type ChatMemory } from '@relay/core';
 import type { StoredMessage } from './db.js';
 import { RunEvents } from './run-events.js';
 
@@ -28,6 +28,7 @@ export class ChatStore {
     if(!(this.db.prepare('PRAGMA table_info(attachments)').all() as {name:string}[]).some(c=>c.name==='processing'))this.db.exec("ALTER TABLE attachments ADD COLUMN processing TEXT NOT NULL DEFAULT 'ready'; ALTER TABLE attachments ADD COLUMN processing_error TEXT");
     this.db.exec('PRAGMA user_version=3;');
     if(!(this.db.prepare('PRAGMA table_info(chats)').all() as {name:string}[]).some(c=>c.name==='provider_id'))this.db.exec('ALTER TABLE chats ADD COLUMN provider_id TEXT');
+    if(!(this.db.prepare('PRAGMA table_info(chats)').all() as {name:string}[]).some(c=>c.name==='task_context'))this.db.exec('ALTER TABLE chats ADD COLUMN task_context TEXT');
     if(!(this.db.prepare('PRAGMA table_info(chats)').all() as {name:string}[]).some(c=>c.name==='memory_generation'))this.db.exec('ALTER TABLE chats ADD COLUMN memory_generation INTEGER NOT NULL DEFAULT 0');
     this.db.exec('CREATE TABLE IF NOT EXISTS chat_memory_versions(device_id INTEGER NOT NULL,chat TEXT NOT NULL,revision INTEGER NOT NULL,PRIMARY KEY(device_id,chat))');
     this.db.exec(`CREATE TABLE IF NOT EXISTS summary_requests(device_id INTEGER NOT NULL,chat TEXT NOT NULL,generation INTEGER NOT NULL,target INTEGER NOT NULL,provider_id TEXT,provider_version INTEGER,force INTEGER NOT NULL DEFAULT 0,expires_at INTEGER NOT NULL,PRIMARY KEY(device_id,chat)); PRAGMA user_version=4;`);
@@ -58,7 +59,7 @@ export class ChatStore {
     if (!r) throw new DomainError('CHAT_NOT_FOUND','Чат не найден или срок хранения истёк. Откройте новый чат.',404);
     let pending = r.pending ? JSON.parse(String(r.pending)) as TaskDraftState : null;
     if (pending && pending.createdAt <= this.now()-CHAT_RETENTION_MS) pending=null;
-    return {id:String(r.id),title:String(r.title),mode:r.mode as ChatMode,timezone:String(r.timezone),version:Number(r.version),createdAt:Number(r.created_at),updatedAt:Number(r.updated_at),expiresAt:Number(r.expires_at),messageCount:Number(r.count),pendingTask:pending,providerId:r.provider_id as string|null};
+    return {id:String(r.id),title:String(r.title),mode:r.mode as ChatMode,timezone:String(r.timezone),version:Number(r.version),createdAt:Number(r.created_at),updatedAt:Number(r.updated_at),expiresAt:Number(r.expires_at),messageCount:Number(r.count),pendingTask:pending,providerId:r.provider_id as string|null,...(r.task_context?{taskContext:JSON.parse(String(r.task_context)) as TaskConversationContext}:{})};
   }
   sessions(device: number): ChatSession[] {
     return (this.db.prepare('SELECT id FROM chats WHERE device_id=? AND expires_at>? ORDER BY updated_at DESC,id LIMIT 500').all(device,this.now()) as {id:string}[]).map(r=>this.get(device,r.id));
@@ -73,6 +74,7 @@ export class ChatStore {
   rename(device:number,id:string,title:unknown,expected:unknown):ChatSession{const chat=this.get(device,id);if(chat.version!==expected)throw new DomainError('CHAT_VERSION_CONFLICT','Чат изменился.',409);if(typeof title!=='string'||!title.trim()||title.trim().length>80)throw new DomainError('VALIDATION_ERROR','Название должно содержать от 1 до 80 символов.');this.db.prepare('UPDATE chats SET title=?,version=version+1 WHERE device_id=? AND id=?').run(title.trim(),device,id);return this.get(device,id);}
   remove(device:number,id:string,expected:unknown):void{if(this.get(device,id).version!==expected)throw new DomainError('CHAT_VERSION_CONFLICT','Чат изменился.',409);this.clear(device,id);this.db.prepare('DELETE FROM chats WHERE device_id=? AND id=?').run(device,id);}
   setDraft(device:number,id:string,draft:TaskDraftState|null): void { this.get(device,id); this.db.prepare('UPDATE chats SET pending=? WHERE device_id=? AND id=?').run(draft?JSON.stringify(draft):null,device,id); }
+  setTaskContext(device:number,id:string,context:TaskConversationContext):void { this.get(device,id); this.db.prepare('UPDATE chats SET task_context=? WHERE device_id=? AND id=?').run(JSON.stringify(context),device,id); }
   bindProvider(device:number,id:string,provider:string|null,expected:number):ChatSession{if(this.get(device,id).version!==expected)throw new DomainError('CHAT_VERSION_CONFLICT','Чат изменился.',409);this.db.prepare('UPDATE chats SET provider_id=?,version=version+1 WHERE device_id=? AND id=?').run(provider,device,id);return this.get(device,id);}
   usesProvider(id:string):boolean{return !!this.db.prepare('SELECT 1 FROM chats WHERE provider_id=? AND expires_at>?').get(id,this.now());}
   pendingExtractions():{device:number;chat:string;id:string;expiresAt:number}[]{return (this.db.prepare("SELECT device_id,chat,id,expires_at FROM attachments WHERE processing IN ('queued','running') AND expires_at>?").all(this.now()) as {device_id:number;chat:string;id:string;expires_at:number}[]).map(r=>({device:r.device_id,chat:r.chat,id:r.id,expiresAt:r.expires_at}));}
@@ -133,7 +135,7 @@ export class ChatStore {
   }
   clear(device:number,chat:string):void {
     this.db.exec('BEGIN IMMEDIATE');
-    try { for(const table of ['messages','attachments','chat_runs','chat_memory','chat_memory_versions','summary_requests','run_snapshots','run_events','extraction_cache','document_runs']) this.db.prepare(`DELETE FROM ${table} WHERE device_id=? AND chat=?`).run(device,chat); this.db.prepare("UPDATE chats SET pending=NULL,title='Новый чат',version=version+1,memory_generation=memory_generation+1 WHERE device_id=? AND id=?").run(device,chat); this.db.exec('COMMIT'); }
+    try { for(const table of ['messages','attachments','chat_runs','chat_memory','chat_memory_versions','summary_requests','run_snapshots','run_events','extraction_cache','document_runs']) this.db.prepare(`DELETE FROM ${table} WHERE device_id=? AND chat=?`).run(device,chat); this.db.prepare("UPDATE chats SET pending=NULL,task_context=NULL,title='Новый чат',version=version+1,memory_generation=memory_generation+1 WHERE device_id=? AND id=?").run(device,chat); this.db.exec('COMMIT'); }
     catch(e){this.db.exec('ROLLBACK');throw e;} this.db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
   }
   prune():void {
